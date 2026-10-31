@@ -9,7 +9,7 @@ from datetime import date, datetime, timezone
 from functools import reduce
 from typing import Any
 
-import httpx
+from app.services.safe_http import safe_fetch_json
 
 from app.services.ext_data import (
     ExtConfig,
@@ -101,23 +101,7 @@ async def fetch_and_ingest(
     if not pull or not pull.url:
         raise ValueError("拉取未配置或 URL 为空")
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        headers = pull.headers or {}
-        kwargs: dict[str, Any] = {"headers": headers}
-
-        if pull.method.upper() == "POST" and pull.body:
-            kwargs["content"] = pull.body
-            if "content-type" not in {k.lower() for k in headers}:
-                kwargs["headers"]["Content-Type"] = "application/json"
-
-        resp = await client.request(pull.method.upper(), pull.url, **kwargs)
-        resp.raise_for_status()
-
-    # 解析 JSON
-    try:
-        data = resp.json()
-    except Exception as e:
-        raise ValueError(f"响应不是有效 JSON: {e}") from e
+    data = await safe_fetch_json(pull.url, pull.method, pull.headers, pull.body)
 
     # 提取行
     rows = _extract_rows(data, pull.response_path)

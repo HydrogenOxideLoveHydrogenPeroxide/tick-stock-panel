@@ -1,3 +1,12 @@
+# ===== Local hardened runtime / audit caches =====
+.venv-local/
+.audit-venv/
+.audit-cache/
+.uv-cache/
+.mpl-cache/
+.numba-cache/
+安全检查与使用说明.md
+
 # ===== Python =====
 __pycache__/
 *.py[cod]

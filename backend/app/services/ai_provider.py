@@ -71,6 +71,8 @@ def normalize_openai_base_url(url: str) -> str:
         base = base[: -len("/chat/completions")].rstrip("/")
     if not base.endswith("/v1"):
         base = f"{base}/v1"
+    if base != "https://api.llm.ustc.edu.cn/v1":
+        raise ValueError("AI仅允许 https://api.llm.ustc.edu.cn/v1；请在设置中填写该地址")
     return base
 
 
@@ -83,10 +85,16 @@ def codex_cli_available() -> bool:
 
 
 def ai_configured(provider: str | None = None) -> bool:
+    if os.environ.get("ENABLE_AI") != "1":
+        return False
     provider = provider or current_ai_provider()
-    if is_codex_cli_provider(provider):
-        return codex_cli_available()
-    return bool(secrets_store.get_ai_key())
+    if provider != OPENAI_COMPAT_PROVIDER:
+        return False
+    try:
+        normalize_openai_base_url(secrets_store.get_ai_config("ai_base_url", settings.ai_base_url))
+    except ValueError:
+        return False
+    return bool(secrets_store.get_ai_key() and current_ai_model())
 
 
 async def generate_ai_text(
@@ -97,6 +105,8 @@ async def generate_ai_text(
     timeout: float = 180.0,
 ) -> str:
     """Return a complete AI response from the currently configured provider."""
+    if os.environ.get("ENABLE_AI") != "1":
+        raise RuntimeError("本地加固版默认禁用 AI/Codex；请先审核供应商与凭据安全")
     if is_codex_cli_provider():
         return await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
     return await _run_openai_once(
@@ -119,6 +129,8 @@ async def stream_ai_text(
     Codex CLI only exposes the final assistant message for this use case, so it
     yields one complete chunk after the command exits.
     """
+    if os.environ.get("ENABLE_AI") != "1":
+        raise RuntimeError("本地加固版默认禁用 AI/Codex；请先审核供应商与凭据安全")
     if is_codex_cli_provider():
         yield await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
         return
@@ -183,14 +195,22 @@ async def _stream_openai(
 
 def _openai_client(api_key: str, timeout: float):
     from openai import AsyncOpenAI
+    import httpx
+    from app.services.safe_http import validate_public_https_url
 
-    user_agent = secrets_store.get_ai_config("ai_user_agent", "") or settings.ai_user_agent
+    if current_ai_provider() != OPENAI_COMPAT_PROVIDER:
+        raise RuntimeError("仅支持审核后限定地址的OpenAI兼容API，Codex不可用")
+    async def guard(request):
+        if str(request.url) != "https://api.llm.ustc.edu.cn/v1/chat/completions" or request.method != "POST":
+            raise RuntimeError("AI请求目标不在白名单")
+        await asyncio.wait_for(asyncio.to_thread(validate_public_https_url, str(request.url)), timeout=10)
     return AsyncOpenAI(
         api_key=api_key,
         base_url=normalize_openai_base_url(secrets_store.get_ai_config("ai_base_url", settings.ai_base_url)),
         timeout=timeout,
-        max_retries=2,
-        default_headers={"User-Agent": user_agent},
+        max_retries=0,
+        http_client=httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=timeout, event_hooks={"request": [guard]}),
+        default_headers={"User-Agent": "TickFlow-Local-Hardened"},
     )
 
 
@@ -200,6 +220,7 @@ async def _run_codex_cli(
     max_tokens: int,
     timeout: float,
 ) -> str:
+    raise RuntimeError("本地加固版禁止Codex CLI：不继承本机登录凭据或启动子进程")
     prompt = _codex_prompt(messages, max_tokens=max_tokens)
     with tempfile.TemporaryDirectory(prefix="tickflow-codex-run-") as run_dir:
         run_path = Path(run_dir)

@@ -77,9 +77,9 @@ class Settings(BaseSettings):
 
     # AI
     ai_provider: str = "openai_compat"
-    ai_base_url: str = "https://api.alysc.top"
+    ai_base_url: str = "https://api.deepseek.com/v1"
     ai_api_key: str = ""
-    ai_model: str = "gpt-5.5"
+    ai_model: str = "deepseek-chat"
     ai_codex_command: str = "codex"
     # 默认浏览器风格 UA,绕过 Cloudflare 等 CDN/WAF 的 Bot 拦截(Issue #8)。
     # 用户可在 AI 设置页按需修改。
@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     )
 
     # Server
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 3018
     log_level: str = "INFO"
     backtest_range_guard: bool = False

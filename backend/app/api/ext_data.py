@@ -27,6 +27,7 @@ from app.services.ext_data import (
     rows_to_parquet,
 )
 from app.services.ext_pull import fetch_and_ingest, pull_scheduler
+from app.services.safe_http import safe_fetch_json
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ext-data", tags=["ext-data"])
@@ -597,20 +598,10 @@ async def test_pull(request: Request, config_id: str):
 
     # 临时构建一个带新配置的 config 用于测试
     from app.services.ext_pull import _extract_rows, _apply_field_map
-    import httpx
 
     pull = config.pull
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            headers = pull.headers or {}
-            kwargs: dict = {"headers": headers}
-            if pull.method.upper() == "POST" and pull.body:
-                kwargs["content"] = pull.body
-                if "content-type" not in {k.lower() for k in headers}:
-                    kwargs["headers"]["Content-Type"] = "application/json"
-            resp = await client.request(pull.method.upper(), pull.url, **kwargs)
-            resp.raise_for_status()
-            data = resp.json()
+        data = await safe_fetch_json(pull.url, pull.method, pull.headers, pull.body)
 
         rows = _extract_rows(data, pull.response_path)
         preview = _apply_field_map(rows[:5], pull.field_map)

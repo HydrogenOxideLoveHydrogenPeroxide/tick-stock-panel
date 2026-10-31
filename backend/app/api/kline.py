@@ -15,43 +15,44 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/kline", tags=["kline"])
 
 
-@router.get("/instruments/search")
-def search_instruments(
-    request: Request,
-    q: str = Query("", min_length=0, max_length=50, description="搜索关键词"),
-    limit: int = Query(20, ge=1, le=50),
-):
-    """模糊搜索标的 (代码 / 名称)。从内存 instruments 缓存中查。"""
-    repo = request.app.state.repo
-    df = repo.get_instruments()
-    if df.is_empty() or not q.strip():
-        return {"results": []}
-
-    keyword = q.strip().upper()
+def _searchable_instruments(repo):
+    """股票和ETF共用搜索/名称清单，不修改股票选股池。"""
     import polars as pl
+    frames = []
+    for df in [repo.get_instruments(), repo.get_etf_instruments()]:
+        if df.is_empty() or "symbol" not in df.columns:
+            continue
+        frames.append(df.select([
+            pl.col("symbol").cast(pl.Utf8),
+            (pl.col("name").cast(pl.Utf8) if "name" in df.columns else pl.col("symbol")).alias("name"),
+            (pl.col("code").cast(pl.Utf8) if "code" in df.columns else pl.col("symbol").str.split(".").list.first()).alias("code"),
+        ]))
+    return pl.concat(frames).unique(subset=["symbol"], maintain_order=True) if frames else pl.DataFrame(schema={"symbol": pl.Utf8, "name": pl.Utf8, "code": pl.Utf8})
 
-    # code/symbol 前缀优先，再 name 包含匹配
-    prefix_mask = (
-        pl.col("code").str.starts_with(keyword)
-        | pl.col("symbol").str.to_uppercase().str.starts_with(keyword)
-    )
-    contains_mask = (
-        pl.col("code").str.contains(keyword, literal=True)
-        | pl.col("symbol").str.to_uppercase().str.contains(keyword, literal=True)
-        | pl.col("name").str.contains(keyword, literal=True)
-    )
 
-    # 前缀匹配优先，剩余名额用包含匹配补充
-    prefix_hits = df.filter(prefix_mask).head(limit)
-    if prefix_hits.height >= limit:
-        matched = prefix_hits
-    else:
-        remaining = limit - prefix_hits.height
-        # 排除已匹配的 symbol
-        prefix_symbols = set(prefix_hits["symbol"].to_list()) if not prefix_hits.is_empty() else set()
-        contain_hits = df.filter(contains_mask & ~pl.col("symbol").is_in(prefix_symbols)).head(remaining)
-        matched = pl.concat([prefix_hits, contain_hits]) if not prefix_hits.is_empty() else contain_hits
-    rows = matched.select(["symbol", "name", "code"]).to_dicts()
+@router.get("/instruments/search")
+def search_instruments(request: Request, q: str = Query("", max_length=50), limit: int = Query(20, ge=1, le=50)):
+    import polars as pl
+    import re
+    df = _searchable_instruments(request.app.state.repo)
+    keyword = q.strip().upper()
+    if df.is_empty() or not keyword:
+        return {"results": []}
+    prefix = pl.col("code").str.starts_with(keyword) | pl.col("symbol").str.to_uppercase().str.starts_with(keyword)
+    contains = pl.col("code").str.contains(keyword, literal=True) | pl.col("symbol").str.to_uppercase().str.contains(keyword, literal=True) | pl.col("name").str.to_uppercase().str.contains(keyword, literal=True)
+    # ETF名称常见顺序不同：纳指国泰ETF / 国泰纳指ETF。
+    tokens = [t for t in re.split(r"\s+", keyword.replace("ETF", " ETF ")) if t]
+    if len(tokens) > 1:
+        token_match = pl.lit(True)
+        for token in tokens:
+            token_match = token_match & pl.col("name").str.to_uppercase().str.contains(token, literal=True)
+        contains = contains | token_match
+    # 顺序无关中文组合匹配仅作低优先级兜底，完整名称/代码仍优先。
+    fallback = pl.lit(True)
+    for char in keyword:
+        if not char.isspace():
+            fallback = fallback & pl.col("name").str.to_uppercase().str.contains(char, literal=True)
+    rows = df.with_columns(pl.when(prefix).then(0).when(contains).then(1).otherwise(2).alias("_rank")).filter(prefix | contains | fallback).sort(["_rank", "symbol"]).head(limit).select(["symbol", "name", "code"]).to_dicts()
     return {"results": rows}
 
 
@@ -61,7 +62,7 @@ def instruments_names(request: Request, symbols: list[str]):
     if not symbols:
         return {"names": {}}
     repo = request.app.state.repo
-    df = repo.get_instruments()
+    df = _searchable_instruments(repo)
     if df.is_empty():
         return {"names": {}}
     import polars as pl
@@ -114,10 +115,15 @@ def get_daily(
         start = end - timedelta(days=days)
 
     stock_info = _get_stock_info(repo, symbol)
+    etfs = repo.get_etf_instruments()
+    etf_hit = etfs.filter(pl.col("symbol") == symbol) if not etfs.is_empty() else pl.DataFrame()
+    is_etf = not etf_hit.is_empty()
+    if is_etf:
+        stock_info = {"name": etf_hit["name"][0], "asset_type": "etf"}
     stock_name = stock_info.get("name")
 
     # 从 enriched 表读取 (已含前复权 OHLCV + 技术指标 + 信号)
-    df = repo.get_daily(symbol, start, end)
+    df = repo.get_etf_daily(symbol, start, end) if is_etf else repo.get_daily(symbol, start, end)
 
     if df.is_empty():
         try:
@@ -136,7 +142,10 @@ def get_daily(
         except Exception as e:  # noqa: BLE001
             logger.debug("单股除权因子拉取失败 %s: %s", symbol, e)
         enriched = compute_enriched(raw, factors=factors)
-        rows = enriched.tail(days).to_dicts()
+        if is_etf:
+            repo.append_etf_daily(raw)
+            repo.append_etf_enriched(enriched)
+        rows = enriched.filter((pl.col("date") >= start) & (pl.col("date") <= end)).tail(days).to_dicts()
         # 即使 live 模式也尝试追加实时蜡烛
         rows = _maybe_inject_live_candle(request, symbol, rows)
         resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
@@ -313,7 +322,13 @@ def get_daily_batch(request: Request, body: dict):
     start = end - timedelta(days=days * 2)  # 多取一些确保交易日够
 
     cols = ["symbol", "date", "open", "high", "low", "close", "volume"]
-    df = repo.get_daily_batch(symbols, start, end, columns=cols)
+    etfs = repo.get_etf_instruments()
+    etf_set = set(etfs["symbol"].to_list()) if not etfs.is_empty() else set()
+    stocks = [s for s in symbols if s not in etf_set]
+    frames = [repo.get_daily_batch(stocks, start, end, columns=cols)] if stocks else []
+    frames.extend(repo.get_etf_daily(s, start, end, columns=cols) for s in symbols if s in etf_set)
+    frames = [d for d in frames if not d.is_empty()]
+    df = pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
     if df.is_empty():
         return {"data": {}}

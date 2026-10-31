@@ -2,19 +2,20 @@
 
 端点:
   GET  /api/auth/status        — 是否已设密码、当前会话是否有效
-  POST /api/auth/setup         — 首次设置密码(仅限本机/内网, 防公网抢占)
+  POST /api/auth/setup         — 首次设置密码(仅限本机回环, 防公网抢占)
   POST /api/auth/login         — 登录(密码 → 会话 token, 含限流)
   POST /api/auth/logout        — 注销当前会话
   POST /api/auth/change-password — 改密码(需已登录)
 
 安全:
-  - setup 端点只接受本机/内网请求(request.client.host), 公网请求 403。
+  - setup 端点只接受本机回环请求(request.client.host), 公网请求 403。
     否则黑客可比用户更早扫到域名, 抢先设密码, 反客为主。
   - login 限流: 同一来源 IP 连续失败 5 次, 锁 5 分钟(内存计数)。
   - 会话 token 通过 HttpOnly cookie 下发, 前端无需手动管理。
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import time
 from collections import defaultdict
@@ -40,42 +41,18 @@ _LOCK_SECONDS = 300
 
 
 def _is_local_network(host: str | None) -> bool:
-    """是否本机或内网请求。
-
-    反向代理(Nginx)场景下 request.client.host 是代理本身(127.0.0.1),
-    需信任 X-Forwarded-For 的最左(原始客户端)。本项目部署若经反代,
-    请在反代配置正确的 X-Forwarded-For(标准做法)。
-    """
+    """仅接受真实连接对端的回环 IP；私网地址不是可信本机。"""
     if not host:
         return False
-    if host in ("127.0.0.1", "::1", "localhost"):
-        return True
-    # 内网网段: 10.x / 172.16-31.x / 192.168.x
-    if host.startswith("10.") or host.startswith("192.168."):
-        return True
-    if host.startswith("172."):
-        try:
-            second = int(host.split(".")[1])
-            if 16 <= second <= 31:
-                return True
-        except (IndexError, ValueError):
-            pass
-    return False
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _client_ip(request: Request) -> str:
-    """取真实客户端 IP。
-
-    安全关键: 仅当直连 peer(request.client.host)本身是回环/内网地址
-    (即请求确实经过同机/内网的可信反代)时, 才采信 X-Forwarded-For。
-    否则公网请求可伪造 `X-Forwarded-For: 127.0.0.1` 冒充内网, 绕过
-    「未设密码仅本机可访问」闸门、抢占 setup 端点、并绕过登录限流。
-    """
-    direct = request.client.host if request.client else ""
-    xff = request.headers.get("x-forwarded-for")
-    if xff and direct and _is_local_network(direct):
-        return xff.split(",")[0].strip()
-    return direct or "unknown"
+    """只使用连接对端地址，不信任客户端提供的 X-Forwarded-For。"""
+    return request.client.host if request.client else "unknown"
 
 
 def _check_login_rate_limit(ip: str) -> None:
@@ -145,17 +122,17 @@ def auth_status(request: Request) -> dict:
 
 @router.post("/setup")
 def setup_password(req: PasswordIn, request: Request) -> dict:
-    """首次设置访问密码。仅限本机/内网请求(防公网抢占)。
+    """首次设置访问密码。仅限本机回环请求(防公网抢占)。
 
     若已设置过密码, 返回 409(改密码走 /change-password)。
     """
-    # 关键: 限制只有服务器主人(本机/内网)能设密码
+    # 关键: 限制只有服务器主人(本机回环)能设密码
     client_ip = _client_ip(request)
     if not _is_local_network(client_ip):
         logger.warning("setup rejected from non-local ip: %s", client_ip)
         raise HTTPException(
             status_code=403,
-            detail="首次设置密码仅允许本机或内网访问,请通过 SSH/本地浏览器操作",
+            detail="首次设置密码仅允许本机回环连接，请通过本地浏览器操作",
         )
 
     if auth.is_configured():

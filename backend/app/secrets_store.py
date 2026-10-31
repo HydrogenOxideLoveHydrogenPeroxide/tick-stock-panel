@@ -37,11 +37,8 @@ def save(updates: dict) -> dict:
     current = load()
     current.update({k: v for k, v in updates.items() if v is not None})
     p = _path()
-    p.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
-    try:
-        os.chmod(p, 0o600)
-    except OSError:
-        pass
+    from app.secure_files import write_private_json
+    write_private_json(p, current)
     return current
 
 
@@ -56,7 +53,8 @@ def clear(*keys: str) -> dict:
     current = load()
     for k in keys:
         current.pop(k, None)
-    p.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+    from app.secure_files import write_private_json
+    write_private_json(p, current)
     return current
 
 

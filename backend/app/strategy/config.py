@@ -20,7 +20,14 @@ def _overrides_dir(data_dir: Path) -> Path:
 
 
 def _path(data_dir: Path, strategy_id: str) -> Path:
-    return _overrides_dir(data_dir) / f"{strategy_id}.json"
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", strategy_id):
+        raise ValueError("Invalid strategy ID")
+    root = _overrides_dir(data_dir).resolve()
+    path = (root / f"{strategy_id}.json").resolve()
+    if path.parent != root:
+        raise ValueError("Strategy path escapes storage directory")
+    return path
 
 
 def load_override(data_dir: Path, strategy_id: str) -> dict:

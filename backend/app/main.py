@@ -124,8 +124,7 @@ async def lifespan(app: FastAPI):
     _screener_svc = ScreenerService(repo)
     strategy_dirs = [
         Path(__file__).resolve().parent / "strategy" / "builtin",
-        store.data_dir / "strategies" / "custom",
-        store.data_dir / "strategies" / "ai",
+        # Hardened local deployment: only audited bundled strategies are loaded.
     ]
     strategy_engine = StrategyEngine(
         enriched_loader=_screener_svc._load_enriched_for_date,
@@ -191,47 +190,63 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS: 允许局域网访问 (自托管场景, 放开所有来源)
-# 注: allow_credentials=True 与 allow_origins=['*'] 不能共存 (浏览器规范),
-# 本项目认证走 header (API Key), 不依赖 cookie, 故关闭 credentials 换取通配来源。
+# 本地部署：仅信任回环地址上的前端/后端来源，认证使用 cookie。
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]")
+_LOCAL_ORIGINS = tuple(
+    f"http://{host}:{port}" for host in _LOCAL_HOSTS for port in (3018, 3011)
+)
+_LOCAL_AUTHORITIES = frozenset(
+    [*_LOCAL_HOSTS, *(f"{host}:{port}" for host in _LOCAL_HOSTS for port in (3018, 3011))]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=list(_LOCAL_ORIGINS),
+    allow_credentials=True,
+    allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
 # ================================================================
 # 访问认证中间件
 # ================================================================
-# 拦截所有 /api/ 请求, 三种状态:
-#   1. 未设密码 + 本机/内网 → 放行(让本机用户访问面板 + 调 /api/auth/setup 设密码)
-#   2. 未设密码 + 公网       → 拒绝(403, 防裸奔也防抢占; 引导本机设密码)
-#   3. 已设密码              → 检查 session, 无效则 401(前端跳登录)
-# 白名单: /api/auth/* (设密码/登录本身)、/health 等探活。
+# 未设密码：敏感 API 对所有来源拒绝；仅保留认证入口和 GET/HEAD 探活。
+# 已设密码：敏感 API 必须有有效 session。Host/Origin 保护先于所有白名单。
 _AUTH_WHITELIST_PREFIX = ("/api/auth/",)
 _AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
 
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    # 严格 Host 防 DNS rebinding；拒绝重复头，避免代理/框架解析差异。
+    hosts = request.headers.getlist("host")
+    origins = request.headers.getlist("origin")
+    if len(hosts) != 1 or hosts[0].lower() not in _LOCAL_AUTHORITIES:
+        return JSONResponse(status_code=403, content={"detail": "安全限制：仅允许本机 Host 访问"})
+    if len(origins) > 1 or (origins and origins[0] not in _LOCAL_ORIGINS):
+        return JSONResponse(status_code=403, content={"detail": "安全限制：不允许跨站来源访问"})
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        return JSONResponse(status_code=403, content={"detail": "安全限制：不允许跨站请求"})
     path = request.url.path
+    # 非只读 API 必须携带可信 Origin，防无 Origin 的跨站表单/请求。
+    # 本机 curl GET 健康检查不需要 Origin；CLI 写操作需显式指定本地 Origin。
+    if path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS") and not origins:
+        return JSONResponse(status_code=403, content={"detail": "安全限制：写操作必须提供可信本地 Origin"})
+    # 同源预检交由 CORS 中间件处理，实际 API 仍须认证。
+    if request.method == "OPTIONS" and origins:
+        return await call_next(request)
     # 仅 /api/ 走认证; 静态资源(前端页面/assets)放行, 由前端处理跳转
     if not path.startswith("/api/"):
         return await call_next(request)
     # 白名单放行(设密码/登录/探活本身不拦)
-    if path.startswith(_AUTH_WHITELIST_PREFIX) or path in _AUTH_WHITELIST_EXACT:
+    if path.startswith(_AUTH_WHITELIST_PREFIX) or (
+        path in _AUTH_WHITELIST_EXACT and request.method in ("GET", "HEAD")
+    ):
         return await call_next(request)
 
     from app.services import auth as auth_service
-    # 情况 1+2: 未设密码
+    # 未设密码时 fail closed，本机/私网也不能调用敏感 API。
     if not auth_service.is_configured():
-        # 本机/内网 → 放行(服务器主人可访问, 并去 /login 设密码)
-        if auth_api._is_local_network(auth_api._client_ip(request)):
-            return await call_next(request)
-        # 公网 → 拒绝。不裸奔, 也不给公网设密码的机会(防抢占)
         return JSONResponse(
             status_code=403,
             content={

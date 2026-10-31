@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
@@ -328,14 +327,14 @@ async def ai_test(request: Request):
 
     try:
         text = await generate_ai_text(
-            [{"role": "user", "content": "Reply exactly: OK"}],
+            [{"role": "user", "content": "您好"}],
             temperature=0,
             max_tokens=8,
             timeout=15,
         )
         return {"ok": True, "model": current_ai_model() or current_ai_provider(), "response": text[:80]}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "AI连接失败：请检查白名单地址、模型ID、密钥及供应商状态（错误详情不回显）"}
 
 
 @router.post("/build")
@@ -375,36 +374,11 @@ async def ai_generate(req: AIGenerateRequest, request: Request):
 
 @router.post("/ai/save")
 async def ai_save(req: AISaveRequest, request: Request):
-    data_dir = _data_dir(request)
-    out_dir = data_dir / "strategies" / "ai"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    # 防 path traversal：strategy_id 仅允许字母/数字/下划线/短横线。
-    # 安全性由字符白名单保证(杜绝 / \ .. 等路径分隔/穿越符),文件落点已被
-    # out_dir 锁死在 data/strategies/ai/。前缀只影响 source 标记,允许
-    # ai_ 与 custom_,以兼容「AI 修改 custom 策略」流程(Screener.tsx onAiModify)。
-    sid = req.strategy_id or ""
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", sid):
-        raise HTTPException(status_code=400, detail="strategy_id 仅允许字母、数字、下划线、短横线")
-    if not (sid.startswith("ai_") or sid.startswith("custom_")):
-        raise HTTPException(status_code=400, detail="策略 ID 必须以 ai_ 或 custom_ 开头")
-    path = out_dir / f"{sid}.py"
-    previous_code = path.read_text(encoding="utf-8") if path.exists() else None
-    path.write_text(req.code, encoding="utf-8")
-
-    # 热重载，并确认保存的策略真的被引擎加载。
-    engine = _get_engine(request)
-    engine.reload()
-    if not engine.has(req.strategy_id):
-        if previous_code is None:
-            path.unlink(missing_ok=True)
-        else:
-            path.write_text(previous_code, encoding="utf-8")
-        engine.reload()
-        raise HTTPException(
-            status_code=400,
-            detail=f"策略保存成功但加载失败: {req.strategy_id}，请检查代码语法和 META.id 是否一致",
-        )
-    return {"ok": True, "path": str(path)}
+    """禁止通过 HTTP 写入并执行任意 Python 策略代码。"""
+    raise HTTPException(
+        status_code=403,
+        detail="安全限制：已禁用 AI 策略代码保存。此接口不会写入代码或热重载；请离线人工审查策略代码后由管理员部署。",
+    )
 
 
 @router.delete("/{strategy_id}")

@@ -243,6 +243,18 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
     from app.config import settings
     from app.services.ai_provider import ai_configured, current_ai_model, current_ai_provider, current_codex_command, normalize_codex_command
 
+    # Validate before changing credentials or runtime settings.
+    from app.services.ai_provider import normalize_openai_base_url
+    if req.provider != "openai_compat":
+        raise HTTPException(status_code=400, detail="本地加固版仅允许OpenAI兼容API，Codex已禁用")
+    try:
+        req.base_url = normalize_openai_base_url(req.base_url or secrets_store.get_ai_config("ai_base_url", settings.ai_base_url))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if req.api_key is not None and (len(req.api_key) > 1024 or any(ord(c) <= 32 or ord(c) == 127 for c in req.api_key)):
+        raise HTTPException(status_code=400, detail="API Key格式无效")
+    if len(req.model) > 200 or any(ord(c) < 32 for c in req.model):
+        raise HTTPException(status_code=400, detail="模型ID格式无效")
     updates: dict = {}
     if req.provider:
         updates["ai_provider"] = req.provider

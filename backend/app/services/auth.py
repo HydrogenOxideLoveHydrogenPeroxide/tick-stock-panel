@@ -56,11 +56,8 @@ def _load() -> dict:
 
 def _save(data: dict) -> None:
     p = _path()
-    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    try:
-        os.chmod(p, 0o600)
-    except OSError:
-        pass
+    from app.secure_files import write_private_json
+    write_private_json(p, data)
 
 
 def _hash_password(password: str, salt: bytes | None = None) -> tuple[str, str]:
