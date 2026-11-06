@@ -144,7 +144,7 @@ def run_now(
         written_daily = kline_sync.sync_and_persist_daily_batch(
             universe, repo, capset,
             start_date=_dt.combine(start_date, _dt.min.time()),
-            end_date=_dt.combine(today, _dt.min.time()),
+            end_date=_dt.now(),
             on_chunk_done=_daily_chunk_progress,
         )
         gap_days = (today - start_date).days
@@ -164,7 +164,7 @@ def run_now(
         written_daily = kline_sync.sync_and_persist_daily_batch(
             universe, repo, capset,
             start_date=_dt.combine(start_date, _dt.min.time()),
-            end_date=_dt.combine(today, _dt.min.time()),
+            end_date=_dt.now(),
             on_chunk_done=_daily_chunk_progress,
         )
         new_daily_days = 365
@@ -324,7 +324,7 @@ def run_now(
                     repo,
                     capset,
                     start_date=_dt.combine(index_start, _dt.min.time()),
-                    end_date=_dt.combine(today, _dt.min.time()),
+                    end_date=_dt.now(),
                     on_chunk_done=_index_chunk,
                 )
                 emit("sync_index", 88, f"指数日K完成,{written_index_daily} 行")
@@ -383,7 +383,7 @@ def run_now(
                     repo,
                     capset,
                     start_date=_dt.combine(etf_start, _dt.min.time()),
-                    end_date=_dt.combine(today, _dt.min.time()),
+                    end_date=_dt.now(),
                     on_chunk_done=_etf_chunk,
                 )
                 emit("sync_index", 88, f"ETF 日K完成,{written_etf_daily} 行")

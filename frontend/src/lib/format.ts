@@ -5,6 +5,11 @@ export function fmtPrice(v: number | null | undefined, digits = 2): string {
   return v.toFixed(digits)
 }
 
+// 场内基金报价最小单位为0.001元；按接口资产类型选择显示精度。
+export function instrumentPriceDigits(assetType?: string | null): number {
+  return ['etf', 'fund', 'lof'].includes(assetType ?? '') ? 3 : 2
+}
+
 export function fmtPct(v: number | null | undefined, digits = 2): string {
   if (v == null || Number.isNaN(v)) return '—'
   const sign = v > 0 ? '+' : ''

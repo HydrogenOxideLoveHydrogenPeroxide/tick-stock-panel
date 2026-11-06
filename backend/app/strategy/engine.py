@@ -53,6 +53,7 @@ class StrategyDef:
     lookback_days: int
     source: str  # "builtin" | "custom" | "ai"
     file_path: Path | None = None
+    prepare_history_fn: Callable[[pl.DataFrame, dict], pl.DataFrame] | None = None
 
 
 @dataclass
@@ -71,17 +72,25 @@ class StrategyEngine:
 
     def __init__(self, enriched_loader: Callable[[date], pl.DataFrame],
                  enriched_history_loader: Callable[[date, int], pl.DataFrame] | None = None,
-                 strategy_dirs: list[Path] | None = None):
+                 strategy_dirs: list[Path] | None = None,
+                 strategy_files: list[Path] | None = None,
+                 raw_history_loader: Callable[[date, int], pl.DataFrame] | None = None,
+                 benchmark_history_loader: Callable[[str, date, int], pl.DataFrame] | None = None,
+                 data_dir: Path | None = None):
         """
         Args:
             enriched_loader: (date) -> pl.DataFrame, 加载指定日期的 enriched 数据
             strategy_dirs:   策略文件搜索目录列表
         """
+        self.data_dir = data_dir
         self._loader = enriched_loader
         self._history_loader = enriched_history_loader
+        self._raw_history_loader = raw_history_loader
+        self._benchmark_history_loader = benchmark_history_loader
         self._strategies: dict[str, StrategyDef] = {}
         self._load_errors: list[dict] = []  # 加载失败的策略 [{file, error}]
         self._strategy_dirs = strategy_dirs or []
+        self._strategy_files = strategy_files or []
         self._load_all()
 
     # ================================================================
@@ -105,6 +114,16 @@ class StrategyEngine:
                     # 不再静默吞掉: 记录失败项, 供前端可见(避免"策略静默消失"误判)。
                     logger.warning("load strategy %s failed: %s", f.name, e)
                     self._load_errors.append({"file": f.name, "error": str(e)})
+        # 仅加载部署代码显式指定的已审查文件，不扫描用户目录。
+        for f in self._strategy_files:
+            if not f.is_file():
+                continue
+            try:
+                s = self._load_file(f)
+                self._strategies[s.meta["id"]] = s
+            except Exception as e:
+                self._load_errors.append({"file": f.name, "error": str(e)})
+                logger.warning("load reviewed strategy %s failed: %s", f.name, e)
 
     def load_errors(self) -> list[dict]:
         """返回最近一次 _load_all 中加载失败的策略 [{file, error}]。"""
@@ -162,6 +181,7 @@ class StrategyEngine:
             lookback_days=int(getattr(mod, "LOOKBACK_DAYS", meta.get("lookback_days", 1)) or 1),
             source=source,
             file_path=path,
+            prepare_history_fn=getattr(mod, "prepare_history", None),
         )
 
     def reload(self) -> None:
@@ -192,6 +212,28 @@ class StrategyEngine:
     # 执行
     # ================================================================
 
+    def check_strategy_dependencies(self, strategy, end, *, data_dir=None):
+        if not strategy.meta.get('fundamental_factor'):
+            return
+        from datetime import datetime, time
+        from app.services.buffett_factors import load_dataset, SHANGHAI, known_input_symbols
+        from app.config import settings
+        data = load_dataset(data_dir or self.data_dir or settings.data_dir)
+        cutoff = datetime.combine(end, time(15), SHANGHAI)
+        if len(known_input_symbols(data, cutoff)) < 5:
+            raise ValueError(f'{end} 前当时可知的财报与市值交集不足5家公司；不加载大规模行情，不回退原策略，不把缺数据当成零收益')
+
+    def prepare_strategy_history(self, strategy, panel, params, *, data_dir=None, benchmark=None):
+        """One audited preparation path for Screener and native backtests."""
+        if strategy.meta.get('fundamental_factor'):
+            from app.services.quality_value_strategy import attach_value_factor
+            from app.config import settings
+            panel = attach_value_factor(panel, data_dir or self.data_dir or settings.data_dir)
+        if not strategy.prepare_history_fn:
+            return panel
+        kwargs = {'benchmark':benchmark} if benchmark is not None and strategy.meta.get('benchmark_symbol') else {}
+        return strategy.prepare_history_fn(panel, params, **kwargs)
+
     def run(
         self,
         strategy_id: str,
@@ -216,12 +258,16 @@ class StrategyEngine:
         t0 = time.perf_counter()
 
         s = self.get(strategy_id)
-        params = params or {}
         overrides = overrides or {}
+        defaults = {p['id']:p['default'] for p in s.meta.get('params', []) if 'id' in p and 'default' in p}
+        params = {**defaults, **(overrides.get('params') or {}), **(params or {})}
+        self.check_strategy_dependencies(s, as_of)
 
         # 加载数据。普通策略只读目标日期；声明 filter_history 的策略读取历史窗口。
         if s.filter_history_fn:
-            if precomputed_history is not None and not precomputed_history.is_empty():
+            if s.meta.get("price_basis") == "raw" and self._raw_history_loader:
+                df = self._raw_history_loader(as_of, max(1, s.lookback_days))
+            elif precomputed_history is not None and not precomputed_history.is_empty():
                 df = precomputed_history
             elif self._history_loader:
                 df = self._history_loader(as_of, max(1, s.lookback_days))
@@ -230,6 +276,16 @@ class StrategyEngine:
                 return StrategyResult(as_of=as_of, strategy_id=strategy_id)
             if df.is_empty():
                 return StrategyResult(as_of=as_of, strategy_id=strategy_id)
+            if s.prepare_history_fn:
+                benchmark = None
+                if s.meta.get("benchmark_symbol") and self._benchmark_history_loader:
+                    benchmark = self._benchmark_history_loader(s.meta["benchmark_symbol"], as_of, max(1, s.lookback_days))
+                df = self.prepare_strategy_history(s, df, params, benchmark=benchmark)
+            if s.meta.get("price_basis") == "raw" and "q_complete" in df.columns:
+                complete = df.filter(pl.col("q_complete"))
+                if complete.is_empty():
+                    return StrategyResult(as_of=as_of, strategy_id=strategy_id)
+                as_of = complete["date"].max()
             df = s.filter_history_fn(df, params)
             if df.is_empty():
                 return StrategyResult(as_of=as_of, strategy_id=strategy_id)

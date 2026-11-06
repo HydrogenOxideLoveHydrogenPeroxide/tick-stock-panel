@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, Bell } from 'lucide-react'
+import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, Bell, Star } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockFinancialSearch } from '@/components/financials/StockFinancialSearch'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { LastStockChip } from '@/components/LastStockChip'
 import { AnalysisKChart, type PriceLevel, type LevelType } from '@/components/stock-analysis/AnalysisKChart'
-import { api } from '@/lib/api'
+import { api, type StockAnalysisMode } from '@/lib/api'
+import { AnalysisDataControls } from '@/components/stock-analysis/AnalysisDataControls'
 import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
@@ -27,11 +29,18 @@ import {
 export function StockAnalysis() {
   const [symbol, setSymbol] = useState<string>('')
   const [name, setName] = useState<string>('')
+  const [dataMode, setDataMode] = useState<StockAnalysisMode>('existing')
+  const [includeNews, setIncludeNews] = useState(false)
   const [checking, setChecking] = useState(false)
   const [confirmReport, setConfirmReport] = useState<{ id: string; created_at: string; focus: string } | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const { last: lastStock, remember: rememberStock } = useLastStock('stock-analysis')
+  const watchlist = useQuery({
+    queryKey: QK.watchlist,
+    queryFn: api.watchlistList,
+    staleTime: 30_000,
+  })
 
   const onSelect = (sym: string, nm: string) => {
     setSymbol(sym)
@@ -60,7 +69,7 @@ export function StockAnalysis() {
   }
 
   const doAnalysis = async () => {
-    const r = await startAnalysis(symbol, name)
+    const r = await startAnalysis(symbol, name, '', dataMode, includeNews)
     if (r.error) toast(r.error, 'error')
   }
 
@@ -129,6 +138,45 @@ export function StockAnalysis() {
             </>
           )}
         </div>
+
+        <AnalysisDataControls symbol={symbol} mode={dataMode} includeNews={includeNews}
+          onModeChange={value => { setDataMode(value); setConfirmReport(null) }}
+          onIncludeNewsChange={value => { setIncludeNews(value); setConfirmReport(null) }} disabled={checking} />
+
+        <section aria-label="自选股" className="rounded-card border border-border/60 bg-surface/40 px-4 py-3">
+          <div className="mb-2 flex items-center gap-2 text-xs text-secondary">
+            <Star className="h-3.5 w-3.5" />
+            <span className="font-medium">自选股</span>
+            {watchlist.data && <span className="text-muted">{watchlist.data.symbols.length} 只</span>}
+            <span className="text-muted">点击查看日K与关键价位</span>
+          </div>
+          {watchlist.isLoading ? (
+            <p className="text-xs text-muted">正在加载自选股…</p>
+          ) : watchlist.isError ? (
+            <div className="flex items-center gap-2 text-xs text-danger">
+              <span>自选股加载失败</span>
+              <button onClick={() => watchlist.refetch()} className="underline" disabled={watchlist.isFetching}>重试</button>
+            </div>
+          ) : !watchlist.data?.symbols.length ? (
+            <p className="text-xs text-muted">暂无自选股，可在<Link to="/watchlist" className="mx-1 text-accent hover:underline">自选股页面</Link>添加。</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {watchlist.data.symbols.map(item => (
+                <button
+                  key={item.symbol}
+                  onClick={() => onSelect(item.symbol, item.name ?? '')}
+                  aria-pressed={symbol === item.symbol}
+                  className={`inline-flex items-center gap-2 rounded-btn border px-3 py-2 text-xs transition-colors ${symbol === item.symbol
+                    ? 'border-sky-400/50 bg-sky-400/10 text-sky-400'
+                    : 'border-border bg-base/30 text-secondary hover:border-sky-400/40 hover:bg-elevated'}`}
+                >
+                  <span className="font-medium">{item.name || item.symbol}</span>
+                  {item.name && <span className="font-mono text-[10px] text-muted">{item.symbol}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
 
         {/* 主体 */}
         {!symbol ? (
@@ -204,7 +252,7 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <LineChart className="h-4 w-4 text-sky-400 shrink-0" />
-            <span className="text-sm font-medium text-foreground">关键价位分析</span>
+            <span className="text-sm font-medium text-foreground">关键价位分析 · 日 K</span>
           </div>
           <div className="flex items-baseline gap-2 shrink-0">
             <span className="text-[10px] text-muted">{rows.length} 个交易日</span>

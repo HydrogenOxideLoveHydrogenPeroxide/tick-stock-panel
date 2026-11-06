@@ -727,11 +727,34 @@ export function StrategyBacktest() {
   const isPending = backtestTask?.isPending ?? false
 
   const dataStatus = useDataStatus()
-  const earliestDate = dataStatus.data?.daily?.earliest_date ?? null
+  const historyCoverage = useQuery({
+    queryKey: ['backtest-history', selectedStrategy],
+    queryFn: () => api.backtestHistory(selectedStrategy!),
+    enabled: !!selectedStrategy,
+    staleTime: 30_000,
+  })
+  const earliestDate = historyCoverage.data?.earliest_date ?? dataStatus.data?.daily?.earliest_date ?? null
 
   const resetConfigFromDetail = (detail: StrategyDetail) => {
     setStrategyParams(strategyDefaultParams(detail))
     setOverrides(buildDefaultOverrides(detail))
+    const defaults = detail.backtest_defaults
+    if (defaults) {
+      setSymbols('')
+      if (defaults.start) setStart(defaults.start)
+      if (defaults.end) setEnd(defaults.end)
+      setEntryFill(defaults.entry_fill)
+      setExitFill(defaults.exit_fill)
+      setFees(String(defaults.commission_pct * 10000))
+      setStampTax(String(defaults.stamp_tax_pct * 1000))
+      setSlippage(String(defaults.slippage_bps))
+      setMaxPositions(String(defaults.max_positions))
+      setMaxExposure(String(defaults.max_exposure_pct * 100))
+      setInitialCapital(String(defaults.initial_capital))
+      setPositionSizing(defaults.position_sizing)
+      setHoldingDays(String(defaults.holding_days))
+      setSimMode('position')
+    }
   }
 
   // 刷新页面后: 从 localStorage 恢复未完成的回测任务
@@ -1010,8 +1033,8 @@ export function StrategyBacktest() {
   const selectedStrategySource = detail?.source ?? strategyList.find(st => st.id === selectedStrategy)?.source
   const stockPoolCount = symbols.split(',').map(s => s.trim()).filter(Boolean).length
   const stockPoolSummary = stockPoolCount > 0 ? `股票池 已限定 ${stockPoolCount} 只` : '股票池 全市场'
-  const resultStartDate = result?.config?.start ?? result?.equity_curve?.[0]?.date ?? start
-  const resultEndDate = result?.config?.end ?? result?.equity_curve?.[result.equity_curve.length - 1]?.date ?? end
+  const resultStartDate = result?.equity_curve?.[0]?.date ?? result?.stats?.data_coverage?.actual_start ?? result?.config?.start ?? start
+  const resultEndDate = result?.equity_curve?.[result.equity_curve.length - 1]?.date ?? result?.stats?.data_coverage?.actual_end ?? result?.config?.end ?? end
   const resultTradeDays = result?.equity_curve?.length ?? 0
   const executionStats = (result?.stats?.execution ?? {}) as Record<string, number>
   const executionSummary = [
@@ -1182,6 +1205,9 @@ export function StrategyBacktest() {
               />
             </div>
           </div>
+
+          {historyCoverage.data && <p className="mt-2 text-[10px] leading-relaxed text-secondary">可用行情：{historyCoverage.data.earliest_date || '无'} ～ {historyCoverage.data.latest_date || '无'}<br />{historyCoverage.data.source}{historyCoverage.data.note && <span className="mt-1 block text-amber-500">{historyCoverage.data.note}</span>}</p>}
+          {historyCoverage.isError && <p className="mt-2 text-[10px] text-amber-500">无法核验策略数据范围，请刷新后重试。</p>}
 
           <div className="mt-2 flex items-center gap-1">
             <div className="flex min-w-0 flex-1 rounded-input bg-base/60 p-0.5">
@@ -1403,6 +1429,7 @@ export function StrategyBacktest() {
         {result?.error && (
           <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
             {result.error}
+            {(result.error.includes('财报') || result.error.includes('价值因子')) && <a className="mt-2 block text-accent underline" href="/quant-assistant#quant-fundamental-sync">前往财报与市值采集（当前快照不会倒填历史）</a>}
           </div>
         )}
 
@@ -1467,6 +1494,12 @@ export function StrategyBacktest() {
         )}
 
         {/* 旧全量模拟结果: 固定前瞻收益统计 (兼容历史缓存结果) */}
+        {result && !result.error && <div className="rounded-card border border-border bg-base/40 px-4 py-2 text-xs text-secondary">
+          实际结果：{String(resultStartDate).slice(0, 10)} ～ {String(resultEndDate).slice(0, 10)}
+          <span className="ml-3 text-muted">请求区间：{String(result.config?.start).slice(0, 10)} ～ {String(result.config?.end).slice(0, 10)}</span>
+          {result.stats?.data_coverage && <span className="ml-3">行情覆盖 {result.stats.data_coverage.trading_days} 个交易日</span>}
+        </div>}
+
         {result && !result.error && result.stats && result.stats.mode === 'full' && result.stats.full_kind !== 'candidate_execution' && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}

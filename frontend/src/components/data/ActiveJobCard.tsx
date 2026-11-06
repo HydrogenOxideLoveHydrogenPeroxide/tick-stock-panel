@@ -10,6 +10,7 @@ export const STAGE_LABELS: Record<string, string> = {
   resolve_universe: '解析标的池',
   sync_instruments: '同步个股维表',
   sync_daily: '同步日 K',
+  sync_etf: '同步自选 ETF',
   sync_adj: '同步除权因子',
   compute_enriched: '计算技术指标',
   sync_minute: '同步分钟 K',
@@ -120,6 +121,7 @@ export function ActiveJobCard({ job }: { job: PipelineJob }) {
             <Pill label="标的池" value={job.result.universe_size ?? '—'} />
             <Pill label="日 K" value={cell(null, `${job.result.daily_days ?? 0} 天`)} />
             <Pill label="除权因子" value={cell('sync_adj', `${job.result.adj_factor_symbols ?? 0} 只`)} />
+            {job.result.etf_daily_rows != null && <Pill label="ETF 日K" value={`${job.result.etf_daily_rows} 行`} />}
             <Pill label="enriched" value={cell(null, `${job.result.enriched_days ?? 0} 行`)} />
             <Pill label="分钟K" value={cell('sync_minute', `${job.result.minute_rows ?? 0} 行`)} />
           </div>

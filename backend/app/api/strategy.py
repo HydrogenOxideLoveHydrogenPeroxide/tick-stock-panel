@@ -93,6 +93,7 @@ def _strategy_detail(s: StrategyDef, overrides: dict | None = None) -> dict:
         "order_by": s.meta.get("order_by", "score"),
         "descending": s.meta.get("descending", True),
         "limit": s.meta.get("limit", 30),
+        "backtest_defaults": s.meta.get("backtest_defaults"),
         "display_limit": overrides.get("display_limit") if overrides and "display_limit" in overrides else None,
     }
 

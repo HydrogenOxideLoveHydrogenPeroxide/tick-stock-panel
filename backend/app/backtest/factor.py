@@ -8,7 +8,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, time as clock_time
 from typing import Literal
 
 import numpy as np
@@ -37,6 +37,12 @@ FACTOR_COLUMNS: list[dict] = [
     {"id": "change_pct",   "label": "日涨跌幅",    "group": "基础",     "desc": "当日涨跌幅"},
     {"id": "amplitude",    "label": "日振幅",      "group": "基础",     "desc": "当日振幅 (最高-最低)/昨收"},
 ]
+
+# Registered for the existing IC/group research workflow. Data availability is
+# checked before loading prices; never synthesize fundamentals from OHLCV.
+from app.services.buffett_factors import FACTOR_META, FACTOR_IDS, COMPOSITE, load_dataset, build_factor_panel, known_input_symbols, SHANGHAI
+FACTOR_COLUMNS += [dict(id=m['id'], label=m['label'], group='个股价值（研究）', desc=m['formula']) for m in FACTOR_META]
+FACTOR_COLUMNS.append(dict(id=COMPOSITE, label='价值质量·行业内综合分', group='个股价值（研究）', desc='行业内五维百分位加权；需6年财报版本及历史总市值，缺数据阻断'))
 
 FACTOR_WARMUP_DAYS = 120
 
@@ -104,9 +110,20 @@ class FactorBacktestService:
                 elapsed_ms=(time.perf_counter() - t0) * 1000,
             )
 
+        fundamental_data = None
+        if config.factor_name in FACTOR_IDS:
+            try:
+                fundamental_data = load_dataset(self.engine.repo.store.data_dir)
+                cutoff=datetime.combine(config.end,clock_time(15),SHANGHAI)
+                minimum=5 if config.factor_name==COMPOSITE else 1
+                if len(known_input_symbols(fundamental_data,cutoff))<minimum:
+                    return _err('回测截止日前没有足够的当时可知财报和新鲜总市值；当前快照不能倒填历史')
+            except ValueError as exc:
+                return _err(str(exc))
+
         # 加载基础面板: 当前 enriched parquet 只持久化基础列, 指标因子可能需要运行时计算。
         panel_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "turnover_rate"]
-        if config.factor_name not in panel_columns:
+        if config.factor_name not in panel_columns and config.factor_name not in FACTOR_IDS:
             panel_columns.append(config.factor_name)
         load_start = config.start
         if config.factor_name not in {"turnover_rate"}:
@@ -122,6 +139,11 @@ class FactorBacktestService:
             return _err("无数据，请检查日期范围或先运行盘后管道")
 
         factor_col = config.factor_name
+        if fundamental_data is not None:
+            financial = build_factor_panel(fundamental_data, panel['date'].unique().to_list(), config.symbols)
+            if financial.is_empty():
+                return _err('回测区间没有当时可知且完整的个股财务/总市值快照；不能用今日财报回填历史')
+            panel = panel.join(financial.select('symbol', 'date', factor_col), on=['symbol','date'], how='left')
         if factor_col not in panel.columns:
             panel = self._compute_missing_factor(panel, factor_col)
         if factor_col not in panel.columns:
@@ -130,6 +152,20 @@ class FactorBacktestService:
             return _err("enriched 数据缺少收盘价 close")
         panel = panel.select(["symbol", "date", "close", factor_col])
         panel = panel.filter((pl.col("date") >= config.start) & (pl.col("date") <= config.end))
+
+        if fundamental_data is not None:
+            # Preserve the full price calendar before dropping unavailable factor
+            # dates; otherwise a gap would masquerade as a one-day return.
+            panel = panel.sort(['symbol', 'date'])
+            if config.rebalance == 'daily':
+                days = sorted(panel['date'].unique().to_list())
+                calendar = pl.DataFrame({'date': days, '_next_date': days[1:] + [None]}, schema={'date':pl.Date,'_next_date':pl.Date})
+                panel = panel.join(calendar, on='date', how='left').sort(['symbol','date'])
+                panel = panel.with_columns(pl.when(pl.col('date').shift(-1).over('symbol') == pl.col('_next_date'))
+                    .then(pl.col('close').shift(-1).over('symbol') / pl.col('close') - 1)
+                    .otherwise(None).alias('_next_return')).drop('_next_date')
+            else:
+                panel = self._calc_period_return(panel, config.rebalance)
 
         # 过滤有效行
         panel = panel.filter(
@@ -145,7 +181,9 @@ class FactorBacktestService:
 
         # 计算下期收益
         # 根据调仓频率计算不同周期的 forward return
-        if config.rebalance == "daily":
+        if fundamental_data is not None:
+            pass  # Returns already use the complete observed price calendar.
+        elif config.rebalance == "daily":
             panel = panel.with_columns(
                 (pl.col("close").shift(-1).over("symbol") / pl.col("close") - 1)
                 .alias("_next_return")
@@ -168,7 +206,13 @@ class FactorBacktestService:
         ic_win_rate = (sum(1 for v in ic_values if v > 0) / len(ic_values)) if ic_values else None
 
         # ── 2. 分层回测 ──
-        panel = self._add_groups(panel, factor_col, config.n_groups)
+        if fundamental_data is not None:
+            # Average ranks keep ties together and avoid qcut duplicate edges.
+            group = (((pl.col(factor_col).rank(method='average').over('date') - .5)
+                      / pl.len().over('date') * config.n_groups).floor() + 1).cast(pl.Int32)
+            panel = panel.with_columns(pl.concat_str(pl.lit('Q'), group.cast(pl.String)).alias('_group'))
+        else:
+            panel = self._add_groups(panel, factor_col, config.n_groups)
         group_nav = self._calc_group_nav(panel, config)
         group_stats = self._calc_group_stats(group_nav, config.start, config.end)
 

@@ -36,9 +36,10 @@ BACKTEST_SERVER_GUARD_MESSAGE = (
 def _get_engine(request: Request):
     """获取或创建 BacktestEngine (单例，PanelCache 跨请求生效)。"""
     from app.backtest.engine import BacktestEngine
+    from app.services.backtest_history import BacktestHistoryRepository
     engine = getattr(request.app.state, "backtest_engine", None)
     if engine is None:
-        engine = BacktestEngine(request.app.state.repo)
+        engine = BacktestEngine(BacktestHistoryRepository(request.app.state.repo))
         request.app.state.backtest_engine = engine
     return engine
 
@@ -69,6 +70,17 @@ def _guard_server_backtest_range(start: date, end: date):
 def status():
     """前端可用此接口判断回测页是否要灰显。"""
     return {"available": True}
+
+
+@router.get("/history")
+def history(request: Request, strategy_id: str | None = None):
+    raw = False
+    if strategy_id:
+        try:
+            raw = request.app.state.strategy_engine.get(strategy_id).meta.get("price_basis") == "raw"
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="策略不存在") from exc
+    return _get_engine(request).repo.history_info(raw=raw)
 
 
 # ================================================================

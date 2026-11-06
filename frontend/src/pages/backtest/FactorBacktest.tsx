@@ -191,6 +191,9 @@ export function FactorBacktest() {
           {factorDesc && (
             <p className="mt-1 text-[11px] text-muted">{factorDesc}</p>
           )}
+          {factorName.startsWith('bv_') && (
+            <p className="mt-2 text-[11px] leading-relaxed text-amber-600">个股价值研究因子：需要6个连续年度财报版本、资本开支、行业及带采集时间的历史总市值。今日下载的财报不能倒填历史；数据不足时阻止计算。IC与收盘价分层收益用于研究，不代表可成交收益或内在价值。<a className="ml-1 text-accent underline" href="/quant-assistant#quant-fundamental-sync">前往采集数据</a></p>
+          )}
         </div>
 
         <div>

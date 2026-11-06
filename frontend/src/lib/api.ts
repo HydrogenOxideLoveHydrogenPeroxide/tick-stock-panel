@@ -151,7 +151,21 @@ export interface StockLevels {
   series?: LevelSeries
 }
 
+export type StockAnalysisMode = 'existing' | 'morning' | 'noon' | 'tail'
+
+/** 来源字段仅展示后端返回值，不推断实时性或数据完整性。 */
+export interface StockAnalysisDataContext {
+  as_of?: string | null
+  source?: unknown
+  period?: unknown
+  warnings?: unknown
+  error?: unknown
+  mode?: StockAnalysisMode
+  [key: string]: unknown
+}
+
 export interface AiStockReport {
+  data_context?: StockAnalysisDataContext
   id: string
   symbol: string
   name: string
@@ -382,6 +396,20 @@ export interface StrategyDetail {
   order_by: string
   descending: boolean
   limit: number
+  backtest_defaults?: {
+    start?: string | null
+    end?: string | null
+    entry_fill: 'close_t' | 'open_t+1'
+    exit_fill: 'close_t' | 'open_t+1'
+    commission_pct: number
+    stamp_tax_pct: number
+    slippage_bps: number
+    max_positions: number
+    max_exposure_pct: number
+    initial_capital: number
+    position_sizing: 'equal' | 'score_weight'
+    holding_days: number
+  } | null
 }
 
 // ===== Custom Signals (自定义信号) =====
@@ -1039,6 +1067,8 @@ export const api = {
       `/api/kline/sync?symbol=${encodeURIComponent(symbol)}&days=${days}`,
       { method: 'POST' },
     ),
+  syncWatchlistEtfs: () =>
+    request<{ status: string; job_id: string }>('/api/kline/sync_etf', { method: 'POST' }),
   syncMinute: () =>
     request<{ status: string; job_id: string }>('/api/kline/sync_minute', { method: 'POST' }),
   extendHistory: (value: number, unit: 'day' | 'month' | 'year') =>
@@ -1162,6 +1192,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  backtestHistory: (strategyId: string) => request<{ earliest_date: string | null; latest_date: string | null; archive_available: boolean; source: string; note: string }>(
+    '/api/backtest/history?strategy_id=' + encodeURIComponent(strategyId)),
 
   strategyBacktestRun: (payload: {
     strategy_id: string
@@ -1446,6 +1479,17 @@ export const api = {
   },
 
   // ===== 个股分析 =====
+  stockAnalysisContext: async (symbol: string, mode: StockAnalysisMode = 'existing', include_news = false, signal?: AbortSignal): Promise<StockAnalysisDataContext> => {
+    const query = new URLSearchParams({ symbol, mode, include_news: String(include_news) })
+    const res = await fetch('/api/stock-analysis/context?' + query, { signal })
+    const data = await res.json() as StockAnalysisDataContext
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('数据检查返回格式无效')
+    if (!res.ok && !data.error) {
+      return { ...data, error: data.detail ?? data.message ?? 'HTTP ' + res.status }
+    }
+    return data
+  },
+
   stockAnalysisLevels: (symbol: string, days = 120) =>
     request<StockLevels>(`/api/stock-analysis/levels?symbol=${encodeURIComponent(symbol)}&days=${days}`),
 
@@ -1453,6 +1497,7 @@ export const api = {
     request<{ reports: AiStockReport[] }>('/api/stock-analysis/reports'),
 
   stockAnalysisReportSave: (r: {
+    data_context?: StockAnalysisDataContext
     symbol: string; name?: string; focus?: string; content: string
     summary?: string; close?: number | null
     levels?: Record<LevelType, PriceLevel[]>
@@ -1468,7 +1513,7 @@ export const api = {
    * AI 个股四维分析 — 流式调用(NDJSON,与财务分析同协议)。
    * meta 里额外带 levels(关键价位)供图表回放。
    */
-  async *stockAnalyzeStream(symbol: string, focus?: string): AsyncGenerator<{
+  async *stockAnalyzeStream(symbol: string, focus?: string, mode: StockAnalysisMode = 'existing', include_news = false): AsyncGenerator<{
     type: 'meta' | 'delta' | 'error' | 'done'
     symbol?: string
     summary?: string
@@ -1476,11 +1521,12 @@ export const api = {
     close?: number | null
     content?: string
     message?: string
+    data_context?: StockAnalysisDataContext
   }> {
     const res = await fetch('/api/stock-analysis/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, focus: focus ?? '' }),
+      body: JSON.stringify({ symbol, focus: focus ?? '', mode, include_news }),
     })
     if (!res.ok) {
       let detail = ''
@@ -1761,6 +1807,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ strategy_id: strategyId, code }),
     }),
+
+  // Quant Assistant: isolated from AI, quotes and trading APIs.
+  getFundamentalSync: () => quantRequest<FundamentalSync>('/api/quant-assistant/value-factors/sync'),
+  startFundamentalSync: (symbols: string[]) => quantRequest<{ job_id: string; status: string }>('/api/quant-assistant/value-factors/sync', { method: 'POST', body: JSON.stringify({ symbols }) }),
+  getQuantCandidates: (portfolio: QuantPortfolio, mode: QuantMode) => quantRequest<QuantCandidates>('/api/quant-assistant/candidates', { method: 'POST', body: JSON.stringify({ portfolio, mode }) }),
+  explainQuantPortfolio: (portfolio: QuantPortfolio, mode: QuantMode) => quantRequest<{ result: QuantSuggestions; analysis: string; model: string }>('/api/quant-assistant/explain', { method: 'POST', body: JSON.stringify({ portfolio, mode }) }),
+  getQuantPortfolio: () => quantRequest<QuantPortfolio>('/api/quant-assistant/portfolio'),
+  saveQuantPortfolio: (portfolio: QuantPortfolio) =>
+    quantRequest<QuantPortfolio>('/api/quant-assistant/portfolio', { method: 'PUT', body: JSON.stringify(portfolio) }),
+  getQuantSuggestions: (portfolio: QuantPortfolio, mode: QuantMode) =>
+    quantRequest<QuantSuggestions>('/api/quant-assistant/suggest', { method: 'POST', body: JSON.stringify({ portfolio, mode }) }),
+  getContextResearchStatus: () => quantRequest<ContextResearchStatus>('/api/quant-assistant/research-context'),
+  getQuantTrades: () => quantRequest<QuantTradeRecord[]>('/api/quant-assistant/trades'),
+  recordQuantTrade: (payload: QuantTradeRequest) => quantRequest<{ portfolio: QuantPortfolio; trade: QuantTradeRecord; duplicate: boolean }>(
+    '/api/quant-assistant/trades', { method: 'POST', body: JSON.stringify(payload) }),
+  getQuantStrategyCatalog: () => quantRequest<QuantStrategyCatalog>('/api/quant-assistant/strategies'),
 }
 
 // ===== Pipeline =====
@@ -1781,6 +1843,8 @@ export interface PipelineJob {
     enriched_days: number
     index_count?: number
     index_daily_rows?: number
+    etf_daily_rows?: number
+    etf_count?: number
     minute_rows: number
     skipped_stages?: string[]
   } | null
@@ -1940,4 +2004,157 @@ export interface AnalysisMenu {
   created_at?: string | null
   updated_at?: string | null
   builtin?: boolean
+}
+
+// ===== Quant Assistant (RMB prices / share quantities) =====
+export interface QuantHolding {
+  symbol: string
+  name: string
+  quantity: number
+  available_quantity: number
+  cost_price: number
+  lot_size: 100 | 200
+  note: string
+}
+export interface ContextResearchStatus {
+  name: string
+  value_factors?: {
+    name: string; status: string; note: string; statement_versions: number; market_versions: number
+    strategy_variants?: { strategy_id: string; name: string }[]
+    factors: { id: string; label: string; formula: string; weight: number }[]
+    limitations: string[]
+  }
+  strategy_id: string
+  value_integration?: { status: string; code_current: boolean; total_tests: number; prediction_validated: boolean; real_historical_windows_blocked: number; generated_at: string } | null
+  full_status: string
+  promotion: string
+  report_available: boolean
+  core_gate_passed?: boolean
+  scenarios?: number
+  components: { name: string; status: string }[]
+  annual_results?: { year: number; total_return: number; max_drawdown: number; trades: number }[]
+  buffett?: { as_of: string; ratio_pct: number; market_cap_trillion: number; nominal_gdp_trillion: number; note: string; market_cap_source: string; gdp_source: string }
+}
+export interface QuantTradeRequest {
+  client_id: string
+  suggestion_key: string
+  expected_portfolio: QuantPortfolio
+  symbol: string
+  side: 'buy' | 'sell'
+  quantity: number
+  price: number
+  fees: number
+  executed_at: string
+}
+export interface QuantTradeRecord {
+  client_id: string
+  suggestion_key: string
+  symbol: string
+  name: string
+  side: 'buy' | 'sell'
+  quantity: number
+  price: number
+  fees: number
+  gross: number
+  cash_before: number
+  cash_after: number
+  quantity_before: number
+  quantity_after: number
+  cost_before: number
+  cost_after: number
+  executed_at: string
+  recorded_at: string
+}
+export interface QuantStrategy {
+  kind: 'trend' | 'mean_reversion'
+  screener_strategy_id: string
+  stop_loss_pct: number
+  take_profit_pct: number
+  max_position_pct: number
+  target_position_pct: number
+  cash_reserve_pct: number
+}
+export interface QuantScreenerPreset {
+  id: string
+  name: string
+  description: string
+  source: string
+}
+export interface QuantStrategyCatalog {
+  strategies: QuantScreenerPreset[]
+  load_errors?: { file: string; error: string }[]
+  mode: string
+  disclaimer: string
+}
+export interface QuantPortfolio {
+  cash: number
+  holdings: QuantHolding[]
+  strategy: QuantStrategy
+}
+export type QuantMode = 'morning' | 'noon' | 'tail'
+export interface QuantSuggestion {
+  symbol: string
+  name: string
+  action: 'buy' | 'sell' | 'reduce' | 'hold' | 'blocked'
+  quantity: number
+  price: number | null
+  market_value: number | null
+  position_pct: number | null
+  pnl_pct: number | null
+  reason: string[]
+  warnings: string[]
+  data_context: Record<string, unknown> | null
+}
+export interface QuantSuggestions {
+  generated_at: string
+  mode: string
+  summary: {
+    cash: number
+    total_assets: number | null
+    market_value: number | null
+    position_pct: number | null
+    buy_budget: number
+  }
+  suggestions: QuantSuggestion[]
+  warnings: string[]
+}
+
+/** Pydantic validation errors stay readable; do not alter legacy request behavior. */
+export function quantErrorDetail(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(quantErrorDetail).filter(Boolean).join('；')
+  if (value && typeof value === 'object') {
+    const item = value as Record<string, unknown>
+    if (typeof item.msg === 'string') {
+      const location = Array.isArray(item.loc) ? item.loc.filter(x => x !== 'body').join('.') : ''
+      return location ? location + '：' + item.msg : item.msg
+    }
+    if ('detail' in item) return quantErrorDetail(item.detail)
+    if ('message' in item) return quantErrorDetail(item.message)
+  }
+  return ''
+}
+async function quantRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(BASE + path, { ...init, headers: { 'Content-Type': 'application/json' } })
+  if (!res.ok) {
+    let detail = ''
+    try { detail = quantErrorDetail(await res.json()) } catch { /* HTTP fallback */ }
+    throw new Error(detail || (res.status + ' ' + res.statusText))
+  }
+  return res.json() as Promise<T>
+}
+
+export interface QuantCandidates {
+  strategy_id: string
+  name: string
+  as_of: string
+  total: number
+  candidates: { symbol: string; name: string; score: number | null }[]
+}
+
+export interface FundamentalSync {
+  status: string; job_id?: string; total?: number; completed?: number; message?: string
+  current_scored_symbols?: number
+  results?: { symbol: string; name?: string; status: string; annual_periods?: number; industry?: string; error?: string }[]
+  notes: string[]
 }

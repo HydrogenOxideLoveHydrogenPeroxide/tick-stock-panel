@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { api, type PriceLevel, type LevelType } from './api'
+import { api, type PriceLevel, type LevelType, type StockAnalysisMode, type StockAnalysisDataContext } from './api'
 
 /**
  * AI 个股分析 —— 全局任务/报告 store(与 aiReportStore 解耦、并行存在)。
@@ -19,6 +19,8 @@ export interface ActiveTask {
   symbol: string
   name: string
   focus: string
+  mode: StockAnalysisMode
+  include_news: boolean
   phase: Phase
   content: string
   error: string
@@ -26,6 +28,7 @@ export interface ActiveTask {
     summary?: string
     levels?: Record<LevelType, PriceLevel[]>
     close?: number | null
+    data_context?: StockAnalysisDataContext
   } | null
   createdAt: number
   savedReportId?: string
@@ -34,6 +37,7 @@ export interface ActiveTask {
 }
 
 export interface HistoryReport {
+  data_context?: StockAnalysisDataContext
   id: string
   symbol: string
   name: string
@@ -157,7 +161,7 @@ export async function findTodayReport(symbol: string): Promise<HistoryReport | n
   return history.find(r => r.symbol === symbol && (r.created_at ?? '').slice(0, 10) === today) ?? null
 }
 
-export async function startAnalysis(symbol: string, name: string, focus = ''): Promise<{ id?: string; error?: string }> {
+export async function startAnalysis(symbol: string, name: string, focus = '', mode: StockAnalysisMode = 'existing', include_news = false): Promise<{ id?: string; error?: string }> {
   const existing = activeTasks.find(t => t.symbol === symbol && (t.phase === 'loading' || t.phase === 'streaming'))
   if (existing) {
     activeDialogTaskId = existing.id
@@ -173,7 +177,7 @@ export async function startAnalysis(symbol: string, name: string, focus = ''): P
 
   const id = `stask_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
   const task: ActiveTask = {
-    id, symbol, name, focus,
+    id, symbol, name, focus, mode, include_news,
     phase: 'loading', content: '', error: '',
     meta: null, createdAt: Date.now(),
   }
@@ -183,19 +187,19 @@ export async function startAnalysis(symbol: string, name: string, focus = ''): P
   rebuildSnap()
   emit()
 
-  runStream(id, symbol, name, focus)
+  runStream(id, symbol, name, focus, mode, include_news)
   return { id }
 }
 
-async function runStream(id: string, symbol: string, _name: string, focus: string) {
+async function runStream(id: string, symbol: string, _name: string, focus: string, mode: StockAnalysisMode, include_news: boolean) {
   try {
     let firstDelta = true
-    for await (const chunk of api.stockAnalyzeStream(symbol, focus)) {
+    for await (const chunk of api.stockAnalyzeStream(symbol, focus, mode, include_news)) {
       const cur = activeTasks.find(t => t.id === id)
       if (!cur) return
       switch (chunk.type) {
         case 'meta':
-          patchTask(id, { meta: { summary: chunk.summary, levels: chunk.levels, close: chunk.close } })
+          patchTask(id, { meta: { summary: chunk.summary, levels: chunk.levels, close: chunk.close, data_context: chunk.data_context } })
           break
         case 'delta':
           if (firstDelta) { patchTask(id, { phase: 'streaming' }); firstDelta = false }
@@ -221,6 +225,7 @@ async function runStream(id: string, symbol: string, _name: string, focus: strin
           symbol: final.symbol, name: final.name, focus: final.focus,
           content: final.content, summary: final.meta?.summary ?? '',
           close: final.meta?.close ?? null, levels: final.meta?.levels,
+          data_context: final.meta?.data_context,
         })
         if (res.report) {
           patchTask(id, { savedReportId: res.report.id })
@@ -256,8 +261,8 @@ export function restoreDialog(taskId: string) {
   }
   activeDialogTaskId = taskId; dialogMinimized = false; rebuildSnap(); emit()
 }
-export async function retryAnalysis(task: { symbol: string; name: string; focus: string }): Promise<{ error?: string }> {
-  return startAnalysis(task.symbol, task.name, task.focus)
+export async function retryAnalysis(task: { symbol: string; name: string; focus: string; mode?: StockAnalysisMode; include_news?: boolean }): Promise<{ error?: string }> {
+  return startAnalysis(task.symbol, task.name, task.focus, task.mode, task.include_news)
 }
 export async function deleteReport(reportId: string): Promise<void> {
   try {

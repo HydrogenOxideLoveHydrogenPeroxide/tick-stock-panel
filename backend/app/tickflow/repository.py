@@ -1087,6 +1087,20 @@ class KlineRepository:
 
         return df
 
+    def get_raw_daily_range(self, start: date, end: date, symbols: list[str] | None = None) -> pl.DataFrame:
+        """研究策略显式读取原始日线，避免混用指标缓存和复权口径。"""
+        schema = {"symbol": pl.String, "date": pl.Date,
+                  **{name: pl.Float64 for name in ("open", "high", "low", "close", "volume", "amount")}}
+        lf = pl.scan_parquet(
+            str(self.store.data_dir / "kline_daily" / "**" / "*.parquet"),
+            schema=schema, extra_columns="ignore", missing_columns="insert",
+            cast_options=pl.ScanCastOptions(integer_cast="allow-float", float_cast="upcast"),
+        )
+        lf = lf.filter(pl.col("date").is_between(start, end))
+        if symbols is not None:
+            lf = lf.filter(pl.col("symbol").is_in(symbols))
+        return lf.sort(["symbol", "date"]).collect()
+
     def get_daily_batch(
         self,
         symbols: list[str],
@@ -1448,6 +1462,10 @@ class KlineRepository:
         storage_cols = [c for c in ENRICHED_STORAGE_COLS if c in df.columns]
         df_storage = df.select(storage_cols)
         self._write_daily_partition(df_storage, "kline_etf_enriched")
+        # 新数据写入后让下一次自选报价读取重新计算 ETF 指标。
+        with self._lock:
+            self._etf_enriched_cache = None
+            self._etf_live_agg_cache = None
 
     def append_daily_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按资产类型写入日K；stock/index 保持旧目录兼容。"""

@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.services.screener import PRESET_STRATEGIES, ScreenerService
+from app.services.screener_strategies import list_screener_strategies, run_screener_strategy
 from app.services import strategy_cache
 from app.strategy import config as strategy_config
 
@@ -176,35 +177,7 @@ def _update_cache_strategy(data_dir, as_of: str, strategy_id: str, safe_data: di
 @router.get("/strategies")
 def strategies(request: Request):
     """策略清单（内置 + 自定义 + AI）。"""
-    data_dir = request.app.state.repo.store.data_dir
-    presets = []
-    seen_ids: set[str] = set()
-
-    # 内置策略
-    for k, v in PRESET_STRATEGIES.items():
-        overrides = strategy_config.load_override(data_dir, k)
-        name = (overrides.get("name") or v["name"]) if overrides else v["name"]
-        desc = (overrides.get("description") or v["description"]) if overrides else v["description"]
-        presets.append({"id": k, "name": name, "description": desc, "source": "builtin"})
-        seen_ids.add(k)
-
-    # 自定义/AI 策略（不在 PRESET_STRATEGIES 中的）
-    engine = getattr(request.app.state, "strategy_engine", None)
-    if engine:
-        for meta in engine.list_strategies():
-            sid = meta["id"]
-            if sid not in seen_ids:
-                overrides = strategy_config.load_override(data_dir, sid)
-                name = (overrides.get("name") or meta["name"]) if overrides else meta["name"]
-                desc = (overrides.get("description") or meta.get("description", "")) if overrides else meta.get("description", "")
-                presets.append({"id": sid, "name": name, "description": desc, "source": meta.get("source", "custom")})
-                seen_ids.add(sid)
-        # 暴露加载失败的策略,让前端可见(避免"策略静默消失"误判为正常)
-        load_errors = engine.load_errors() if engine else []
-    else:
-        load_errors = []
-
-    return {"presets": presets, "load_errors": load_errors}
+    return list_screener_strategies(request.app.state.repo, getattr(request.app.state, "strategy_engine", None))
 
 
 @router.post("/run")
@@ -235,45 +208,15 @@ def run_preset(req: PresetRequest, request: Request):
     if not as_of:
         raise HTTPException(status_code=400, detail="无可用数据日期")
 
-    # 加载用户保存的策略配置
-    data_dir = request.app.state.repo.store.data_dir
+    data_dir = repo.store.data_dir
     ext_values = _load_ext_value_maps(repo, req.ext_columns)
-    overrides = strategy_config.load_override(data_dir, req.strategy_id)
-    bf = overrides.get("basic_filter") if overrides else None
-    dl = overrides.get("display_limit") if overrides else None
-    if dl is None and overrides and "display_limit" in overrides:
-        dl = 0
-
-    # 内置策略
-    if req.strategy_id in PRESET_STRATEGIES:
-        try:
-            result = svc.run_preset(req.strategy_id, as_of=as_of, pool=req.pool, basic_filter=bf, display_limit=dl)
-        except ValueError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
-        safe_data = _safe(asdict(result))
-        _update_cache_strategy(data_dir, str(as_of), req.strategy_id, safe_data)
-        return _result_with_ext(safe_data, ext_values)
-
-    # 自定义/AI 策略 — 通过 StrategyEngine 执行
-    engine = getattr(request.app.state, "strategy_engine", None)
-    if not engine:
-        raise HTTPException(status_code=404, detail=f"策略引擎未初始化或策略 {req.strategy_id} 不存在")
-
     try:
-        result = engine.run(req.strategy_id, as_of, pool=req.pool, overrides=overrides or None)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-
-    data = asdict(result)
-
-    if dl is not None and dl > 0:
-        data["rows"] = data["rows"][:dl]
-        data["total"] = min(data["total"], dl)
-
-    # 单跑后更新缓存中该策略的结果（保持缓存最新）
-    safe_data = _safe(data)
+        result, _ = run_screener_strategy(repo, getattr(request.app.state, "strategy_engine", None),
+                                          req.strategy_id, as_of, pool=req.pool)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    safe_data = _safe(asdict(result))
     _update_cache_strategy(data_dir, str(as_of), req.strategy_id, safe_data)
-
     return _result_with_ext(safe_data, ext_values)
 
 

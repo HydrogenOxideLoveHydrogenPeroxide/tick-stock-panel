@@ -412,11 +412,85 @@ def sync_symbol(
     symbol: str = Query(...),
     days: int = Query(250, ge=10, le=2000),
 ):
-    """手动触发单股同步(Free 用户在 K 线页用)。"""
+    """手动同步单标的，ETF 写入独立存储。"""
     repo = request.app.state.repo
     capset = request.app.state.capabilities
-    n = kline_sync.sync_and_persist_daily_batch([symbol], repo, capset, count=days)
+    from app.tickflow.capabilities import Cap
+    from app.services import index_sync
+    if not capset.has(Cap.KLINE_DAILY_BATCH):
+        raise HTTPException(status_code=403, detail="当前数据源不支持日K同步")
+    etfs = repo.get_etf_instruments()
+    if not etfs.is_empty() and symbol in etfs["symbol"].to_list():
+        from datetime import datetime
+        end = datetime.now()
+        n = index_sync.sync_and_persist_etf_daily(
+            repo, capset, symbols_override=[symbol],
+            start_date=end - timedelta(days=days), end_date=end,
+        )
+    else:
+        n = kline_sync.sync_and_persist_daily_batch([symbol], repo, capset, count=days)
+        repo.refresh_cache()
+    if not n:
+        raise HTTPException(status_code=502, detail="来源未返回日K数据，请查看同步日志后重试")
+    from app.api.data import invalidate_storage_cache
+    invalidate_storage_cache()
     return {"symbol": symbol, "rows_written": n}
+
+
+@router.post("/sync_etf")
+async def sync_watchlist_etfs(request: Request, days: int = Query(365, ge=120, le=2000)):
+    """独立同步自选 ETF；不受全市场 ETF 自动拉取开关影响。"""
+    import asyncio
+    from datetime import datetime
+    from app.services import index_sync, watchlist
+    from app.services.pipeline_jobs import job_store
+    from app.api.data import invalidate_storage_cache
+    from app.tickflow.capabilities import Cap
+
+    repo = request.app.state.repo
+    capset = request.app.state.capabilities
+    if not capset.has(Cap.KLINE_DAILY_BATCH):
+        raise HTTPException(status_code=403, detail="当前数据源不支持日K同步")
+    job_store.reap_stale()
+    active = job_store.active_id()
+    if active:
+        raise HTTPException(status_code=409, detail="已有同步任务在运行，请完成后重试")
+
+    async def task(job_id: str):
+        job_store.start(job_id)
+        def run():
+            job_store.progress(job_id, "sync_etf", 5, "读取自选 ETF…")
+            instruments = repo.get_etf_instruments()
+            if instruments.is_empty():
+                index_sync.sync_etf_instruments(repo)
+                instruments = repo.get_etf_instruments()
+            known = set(instruments["symbol"].to_list()) if not instruments.is_empty() else set()
+            symbols = sorted({r["symbol"] for r in watchlist.list_symbols()} & known)
+            if not symbols:
+                raise ValueError("自选列表没有已识别的 ETF，请先添加基金或检查 ETF 维表来源")
+            end = datetime.now()
+            written = index_sync.sync_and_persist_etf_daily(
+                repo, capset, symbols_override=symbols,
+                start_date=end - timedelta(days=days), end_date=end,
+                on_chunk_done=lambda cur, total: job_store.progress(
+                    job_id, "sync_etf", 10 + int(85 * cur / total),
+                    f"ETF 日K {cur}/{total} 批", stage_pct=int(100 * cur / total)),
+            )
+            if not written:
+                raise ValueError("来源未返回 ETF 日K，未更新数据；请查看服务日志后重试")
+            return {"etf_daily_rows": written, "etf_count": len(symbols)}
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(_long_task_executor, run)
+            invalidate_storage_cache()
+            job_store.succeed(job_id, result)
+        except Exception as e:
+            logger.exception("自选 ETF 同步失败")
+            invalidate_storage_cache()
+            job_store.fail(job_id, str(e))
+
+    job_id = job_store.create()
+    asyncio.create_task(task(job_id))
+    return {"status": "started", "job_id": job_id}
 
 
 @router.post("/sync_batch")

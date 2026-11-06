@@ -92,6 +92,18 @@ export function Data() {
     },
   })
 
+  const syncEtfs = useMutation({
+    mutationFn: api.syncWatchlistEtfs,
+    onSuccess: ({ job_id }) => {
+      setActiveJobId(job_id)
+      startTime.current = Date.now()
+    },
+  })
+  const updateEtfAuto = useMutation({
+    mutationFn: (enabled: boolean) => api.updatePipelinePullTypes({ pipeline_pull_etf: enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
+  })
+
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const clearData = useMutation({
     mutationFn: api.dataClear,
@@ -222,6 +234,9 @@ export function Data() {
     if (job.data && (job.data.status === 'succeeded' || job.data.status === 'failed')) {
       qc.invalidateQueries({ queryKey: QK.dataStatus })
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
+      qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
+      qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
+      qc.invalidateQueries({ queryKey: ['kline'] })
       const t = setTimeout(() => setActiveJobId(null), 5_000)
       return () => clearTimeout(t)
     }
@@ -283,6 +298,7 @@ export function Data() {
     compute_enriched: 'enriched',
     rebuild_enriched: 'enriched',
     sync_index: 'index_daily',
+    sync_etf: 'etf',
     sync_minute: 'minute',
     extend_minute: 'minute',
   }
@@ -438,6 +454,9 @@ export function Data() {
             stats={etfOverviewStats}
             loading={isLoading}
             tierKey="etf"
+            active={activeCard === 'etf'}
+            done={doneStages.has('etf')}
+            stagePct={activeCard === 'etf' ? (job.data?.stage_pct ?? 0) : 0}
             capLimits={caps.data?.capabilities}
             tierLabel={caps.data?.label}
             auto={etfAuto}
@@ -448,6 +467,8 @@ export function Data() {
               { label: '指标', table: 'etf_enriched' },
             ] as FieldTab[]}
             onShowFields={(t) => setSchemaTable(t ?? 'etf_daily')}
+            onSettings={() => setOpenSettings(v => v === 'etf' ? null : 'etf')}
+            settingsOpen={openSettings === 'etf'}
           />
         )
       case 'minute':
@@ -516,6 +537,13 @@ export function Data() {
             >
               <CheckSquare className="h-3.5 w-3.5" />
               数据范围
+            </button>
+            <button
+              onClick={() => setOpenSettings('etf')}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
+            >
+              <Database className="h-3.5 w-3.5" />
+              基金同步
             </button>
             <div className="w-px h-4 bg-border" />
             <div className="flex items-center gap-1.5">
@@ -902,6 +930,39 @@ export function Data() {
         {openSettings === 'page-settings' && (
           <SettingsModal title="页面设置 · 数据画像卡片" onClose={() => setOpenSettings(null)}>
             <PageSettingsModal caps={caps.data?.capabilities} />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'etf' && (
+          <SettingsModal title="ETF · 数据同步" onClose={() => setOpenSettings(null)}>
+            <div className="space-y-4">
+              <p className="text-xs text-secondary leading-relaxed">
+                同步自选列表中的场内基金，获取最近一年日K并更新技术指标。历史日K不等于实时行情，日期以来源返回为准。
+              </p>
+              <button
+                onClick={() => syncEtfs.mutate()}
+                disabled={!hasDailyBatchCap || !!activeJobId || syncEtfs.isPending}
+                className="inline-flex items-center gap-1.5 rounded-btn border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-accent disabled:opacity-40"
+              >
+                {syncEtfs.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                同步自选基金
+              </button>
+              {syncEtfs.isError && <p role="alert" className="text-xs text-danger">{String(syncEtfs.error.message)}</p>}
+              {!hasDailyBatchCap && <p className="text-xs text-warning">当前数据源未开放日K同步，请检查数据源设置。</p>}
+              <label className="flex items-center gap-2 text-xs text-secondary">
+                <input
+                  type="checkbox"
+                  checked={etfAuto}
+                  disabled={updateEtfAuto.isPending}
+                  onChange={e => updateEtfAuto.mutate(e.target.checked)}
+                />
+                立即同步和盘后任务包含全市场 ETF（首次较慢）
+              </label>
+              {updateEtfAuto.isError && <p role="alert" className="text-xs text-danger">{String(updateEtfAuto.error.message)}</p>}
+              {!etfAuto && <p className="text-xs text-muted">当前全市场 ETF 同步已关闭，上方按钮仍可独立更新自选基金。</p>}
+            </div>
           </SettingsModal>
         )}
       </AnimatePresence>

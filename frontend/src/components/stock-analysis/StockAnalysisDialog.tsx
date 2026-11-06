@@ -5,6 +5,8 @@ import {
   Settings2, Send, Wand2, Minimize2, History, LineChart,
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import type { StockAnalysisMode } from '@/lib/api'
+import { AnalysisDataControls, AnalysisDataContext } from './AnalysisDataControls'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import {
   type ActiveTask, type HistoryReport,
@@ -35,12 +37,14 @@ function getContent(task: ActiveTask | HistoryReport | null): string {
 function getMeta(task: ActiveTask | HistoryReport | null) {
   if (!task) return null
   if ('meta' in task) return task.meta
-  return { summary: task.summary, close: task.close, levels: task.levels }
+  return { summary: task.summary, close: task.close, levels: task.levels, data_context: task.data_context }
 }
 
 export function StockAnalysisDialog({ task, mode, minimized }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [focus, setFocus] = useState('')
+  const [dataMode, setDataMode] = useState<StockAnalysisMode>('existing')
+  const [includeNews, setIncludeNews] = useState(false)
   const [copied, setCopied] = useState(false)
 
   const phase = getPhase(task)
@@ -58,13 +62,17 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
 
   useEffect(() => {
     setFocus(task && 'focus' in task ? task.focus : '')
-  }, [task])
+    setDataMode(task && 'mode' in task ? task.mode : task?.data_context?.mode ?? 'existing')
+    setIncludeNews(task && 'include_news' in task ? task.include_news : false)
+    // 流式 task 更新不重置用户正在编辑的选项。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task?.id])
 
   const handleStartNew = useCallback(async () => {
     if (!task) return
     const name = 'name' in task ? task.name : ''
-    await startAnalysis(task.symbol, name, focus.trim())
-  }, [task, focus])
+    await startAnalysis(task.symbol, name, focus.trim(), dataMode, includeNews)
+  }, [task, focus, dataMode, includeNews])
 
   const handleCopy = async () => {
     if (!content) return
@@ -147,6 +155,12 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
             </div>
           </div>
 
+          {meta?.data_context && (
+            <div className="border-b border-border/40 px-5 py-2" aria-label="本报告数据来源">
+              <AnalysisDataContext context={meta.data_context} />
+            </div>
+          )}
+
           {/* 内容区 */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 min-h-[280px]">
             {phase === 'loading' && !content && (
@@ -158,7 +172,7 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                   <Loader2 className="absolute -inset-1 h-12 w-12 text-sky-400/40 animate-spin" style={{ animationDuration: '3s' }} />
                 </div>
                 <div className="text-xs text-secondary">AI 正在分析行情与关键价位…</div>
-                <div className="text-[10px] text-muted">读取日 K / 技术指标 / 压力支撑 / 财务,生成四维分析</div>
+                <div className="text-[10px] text-muted">等待分析数据与模型响应；来源与截止以返回数据为准</div>
               </div>
             )}
 
@@ -193,7 +207,9 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
           </div>
 
           {/* 底部:关注点输入 */}
-          <div className="border-t border-border/50 bg-surface/60 px-5 py-3">
+          <div className="border-t border-border/50 bg-surface/60 px-5 py-3 space-y-3">
+            <AnalysisDataControls key={task?.id} symbol={task?.symbol ?? ''} mode={dataMode} includeNews={includeNews}
+              onModeChange={setDataMode} onIncludeNewsChange={setIncludeNews} disabled={isWorking} />
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1.5 text-[10px] text-muted shrink-0">
                 <Wand2 className="h-3 w-3" />
@@ -234,7 +250,7 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
             <p className="mt-1.5 text-[10px] text-muted/50 leading-relaxed">
               {isHistory
                 ? '历史报告为静态记录;修改关注重点后将作为新任务重新生成。报告仅供参考,不构成投资建议。'
-                : '报告由项目已配置的 AI 模型基于本地行情与财务数据生成;消息面维度暂依据价量异动推断。报告仅供参考,不构成投资建议。'}
+                : '报告由项目已配置的 AI 模型生成；分析输入取决于所选数据模式，来源、截止与警告以返回数据为准。新闻辅助默认关闭，开启不保证有新闻数据。报告仅供参考，不构成投资建议。'}
             </p>
           </div>
         </motion.div>

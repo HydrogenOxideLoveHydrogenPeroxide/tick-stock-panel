@@ -5,7 +5,7 @@ import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, 
 import { api, type KlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
-import { fmtPrice, fmtPct, fmtBigNum, priceColorClass } from '@/lib/format'
+import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, instrumentPriceDigits } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
@@ -349,7 +349,7 @@ function StockCard({
   const board = boardTag(r.symbol)
   const price = r.rt_price ?? r.close
   const pct = r.rt_pct ?? r.change_pct
-  const name = r.rt_name ?? r.name
+  const name = r.rt_name?.trim() || r.name?.trim()
   const signals = getSignals(r)
   const isUp = (pct ?? 0) > 0
   const isDown = (pct ?? 0) < 0
@@ -424,7 +424,7 @@ function StockCard({
         {/* 第二行: 大价格 + 涨跌幅胶囊 */}
         <div className="flex items-end justify-between gap-2 mb-2">
           <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
-            {fmtPrice(price)}
+            {fmtPrice(price, instrumentPriceDigits(r.asset_type))}
           </span>
           {pct != null && (
             <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
@@ -983,7 +983,7 @@ export function Watchlist() {
                 const key = col.source.key
                 const price = r.rt_price ?? r.close
                 const pct = r.rt_pct ?? r.change_pct
-                const name = r.rt_name ?? r.name
+                const name = r.rt_name?.trim() || r.name?.trim()
                 // 自选页 symbol 列：预览 + 内嵌删除（减号图标，二次确认）
                 if (key === 'symbol') {
                   const board = boardTag(r.symbol)
@@ -1056,7 +1056,7 @@ export function Watchlist() {
                 // 实时行情列：price/pct/amount 使用 rt_ 回退（自选页有实时推送）
                 const numCls = 'px-2 py-1.5 text-right num tabular-nums'
                 if (key === 'price') {
-                  return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPrice(price)}</td>
+                  return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPrice(price, instrumentPriceDigits(r.asset_type))}</td>
                 }
                 if (key === 'pct') {
                   return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPct(pct)}</td>

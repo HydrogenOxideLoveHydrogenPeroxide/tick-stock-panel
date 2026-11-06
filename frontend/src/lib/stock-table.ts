@@ -94,6 +94,7 @@ export function getSortValue(r: any, col: ColumnConfig): any {
     case 'momentum_10d':  return r.momentum_10d
     case 'momentum_20d':  return r.momentum_20d
     case 'momentum_30d':  return r.momentum_30d
+    case 'momentum': // 兼容旧自选列配置
     case 'momentum_60d':  return r.momentum_60d
     case 'limit_ups':     return r.consecutive_limit_ups ?? 0
     case 'limit_downs':   return r.consecutive_limit_downs ?? 0

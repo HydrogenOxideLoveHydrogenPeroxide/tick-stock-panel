@@ -177,6 +177,10 @@ class BacktestEngine:
 
     # ── 数据加载 ──────────────────────────────────────
 
+    def load_raw_panel(self, symbols: list[str] | None, start: date, end: date) -> pl.DataFrame:
+        """原始价格策略独立数据入口；不复用enriched缓存。"""
+        return self.repo.get_raw_daily_range(start, end, symbols=symbols)
+
     def load_panel(
         self,
         symbols: list[str] | None,

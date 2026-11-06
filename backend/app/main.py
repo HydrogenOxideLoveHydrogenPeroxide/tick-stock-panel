@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
+from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist, quant_assistant
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
@@ -127,9 +128,18 @@ async def lifespan(app: FastAPI):
         # Hardened local deployment: only audited bundled strategies are loaded.
     ]
     strategy_engine = StrategyEngine(
+        data_dir=repo.store.data_dir,
         enriched_loader=_screener_svc._load_enriched_for_date,
         enriched_history_loader=_screener_svc._load_enriched_history,
         strategy_dirs=strategy_dirs,
+        strategy_files=[
+            Path(__file__).resolve().parents[3] / "quant-rsi" / "quant" / "index" / "panel.py",
+            Path(__file__).resolve().parents[3] / "quant-rsi" / "quant" / "index" / "context_core_panel.py",
+        ],
+        benchmark_history_loader=lambda symbol, target, lookback: repo.get_index_daily(
+            symbol, target - timedelta(days=max(365, lookback * 2)), target),
+        raw_history_loader=lambda target, lookback: repo.get_raw_daily_range(
+            target - timedelta(days=max(180, lookback * 2)), target),
     )
     app.state.strategy_engine = strategy_engine
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
@@ -268,6 +278,7 @@ app.include_router(core_router)
 app.include_router(auth_api.router)
 app.include_router(kline.router)
 app.include_router(watchlist.router)
+app.include_router(quant_assistant.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
 app.include_router(intraday.router)

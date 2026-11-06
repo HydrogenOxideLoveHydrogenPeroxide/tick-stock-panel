@@ -126,6 +126,28 @@ def test_score_normalizes_inside_strategy_candidate_universe():
     assert scores["C"] == 0.0
 
 
+def test_prepared_history_score_reaches_portfolio_matcher():
+    start = date(2024, 1, 1)
+    panel = pl.DataFrame([
+        dict(symbol=symbol, date=start + timedelta(days=i), open=10., high=10.,
+             low=10., close=10., volume=100_000, amount=1000.)
+        for symbol in ("A", "B") for i in range(3)
+    ]).sort(["symbol", "date"])
+    prepared = lambda df, p: df.with_columns(
+        pl.when(pl.col("symbol") == "B").then(90.).otherwise(10.).alias("history_score"))
+    strategy = _strategy(
+        meta={"id": "test", "name": "test", "scoring": {}, "params": [], "order_by": "history_score", "descending": True},
+        prepare_history_fn=prepared, filter_history_fn=lambda df, p: df,
+    )
+    engine = _EngineStub(panel)
+    result = StrategyBacktestService(engine, _StrategyEngineStub(strategy)).run(
+        StrategyBacktestConfig(strategy_id="test", symbols=None, start=start, end=start + timedelta(days=2)))
+    assert result.error is None
+    assert engine.sim_panel is not None
+    assert engine.sim_panel.filter(pl.col("symbol") == "B")["score"].to_list() == [90.] * 3
+    assert engine.sim_panel.filter(pl.col("symbol") == "A")["score"].to_list() == [10.] * 3
+
+
 def test_full_mode_executes_every_candidate_with_strategy_rules():
     start = date(2024, 1, 1)
     panel = pl.DataFrame([

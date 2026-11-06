@@ -1,3 +1,5 @@
+> 本分支的本地量化扩展、配套策略库固定版本及数据准备：见 [LOCAL_QUANT_SETUP.md](LOCAL_QUANT_SETUP.md)。源码发布不包含持仓、行情缓存或历史研究归档。
+
 
 <div align="center">
 

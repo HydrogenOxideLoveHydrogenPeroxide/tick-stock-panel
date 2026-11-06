@@ -99,8 +99,14 @@ class StrategyBacktestService:
         except ValueError as e:
             return _err(str(e))
 
-        params = self._normalize_params(config.params or {}, s)
         overrides = config.overrides or {}
+        params = self._normalize_params({**(overrides.get('params') or {}), **(config.params or {})}, s)
+        try:
+            directory = getattr(getattr(self.engine.repo, 'store', None), 'data_dir', None)
+            if s.meta.get('fundamental_factor'):
+                self.strategy_engine.check_strategy_dependencies(s, config.end, data_dir=directory)
+        except ValueError as exc:
+            return _err(f'策略依赖数据未就绪: {exc}')
         basic_filter = self._effective_basic_filter(s, overrides)
         entry_signals = self._effective_signals(overrides, "entry_signals", s.entry_signals)
         exit_signals = self._effective_signals(overrides, "exit_signals", s.exit_signals)
@@ -149,14 +155,33 @@ class StrategyBacktestService:
             load_end = config.end + timedelta(days=fwd_buffer * 2)  # 日历日放宽, 确保覆盖 N 个交易日
 
         t_load = time.perf_counter()
-        panel = self.engine.load_panel(config.symbols, load_start, load_end)
+        if s.meta.get("price_basis") == "raw":
+            panel = self.engine.load_raw_panel(config.symbols, load_start, load_end)
+        else:
+            panel = self.engine.load_panel(config.symbols, load_start, load_end)
         timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
         if panel.is_empty():
             return _err("无数据，请检查日期范围或先运行盘后管道")
 
+        if s.prepare_history_fn:
+            try:
+                directory = getattr(getattr(self.engine.repo, 'store', None), 'data_dir', None)
+                if hasattr(self.strategy_engine, 'prepare_strategy_history'):
+                    panel = self.strategy_engine.prepare_strategy_history(s, panel, params, data_dir=directory)
+                else:
+                    panel = s.prepare_history_fn(panel, params)
+            except Exception as e:
+                return _err(f"策略历史因子计算失败: {e}")
+            if panel.is_empty():
+                return _err("策略历史因子过滤后无数据")
+
         formal_range = self._date_range_mask(panel, config.start, config.end)
         if not formal_range.any():
             return _err("正式回测区间内无数据")
+        covered_dates = panel.filter(formal_range)["date"]
+        data_coverage = dict(requested_start=str(config.start), requested_end=str(config.end),
+                             actual_start=str(covered_dates.min()), actual_end=str(covered_dates.max()),
+                             trading_days=covered_dates.n_unique())
 
         t_signal = time.perf_counter()
 
@@ -193,6 +218,21 @@ class StrategyBacktestService:
         sim_exit_mask = exit_mask.filter(sim_range)
         if sim_panel.is_empty():
             return _err("正式回测区间内无数据")
+
+        # Long raw-price research panels contain millions of non-candidate rows.
+        # Prune only AFTER ranking/signals, and only if the market calendar is unchanged.
+        if s.meta.get("price_basis") == "raw" and config.mode == "position":
+            entry_symbols = sim_panel.filter(sim_entry_mask)["symbol"].unique().to_list()
+            keep = sim_panel["symbol"].is_in(entry_symbols)
+            reduced = sim_panel.filter(keep)
+            if reduced["date"].n_unique() == sim_panel["date"].n_unique():
+                sim_panel = reduced
+                sim_entry_mask = sim_entry_mask.filter(keep)
+                sim_exit_mask = sim_exit_mask.filter(keep)
+            matching_columns = [c for c in ["symbol", "date", "open", "high", "low", "close", "volume",
+                                           "name", "score", "signal_limit_up", "signal_limit_down"] if c in sim_panel.columns]
+            sim_panel = sim_panel.select(matching_columns)
+            panel = None  # Release factor columns before the portfolio matcher allocates arrays.
 
         t_sim = time.perf_counter()
         matcher_config = MatcherConfig(
@@ -245,6 +285,7 @@ class StrategyBacktestService:
         timing_ms["total"] = round((time.perf_counter() - t0) * 1000, 1)
         result.stats["timing_ms"] = timing_ms
         result.stats["panel_rows"] = int(sim_panel.height)
+        result.stats["data_coverage"] = data_coverage
 
         benchmark_curve = self._build_benchmark_curve(config.start, config.end)
 

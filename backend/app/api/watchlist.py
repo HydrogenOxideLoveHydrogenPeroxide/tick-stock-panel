@@ -30,19 +30,25 @@ class BatchAddRequest(BaseModel):
 def _watchlist_instruments(repo) -> pl.DataFrame:
     """合并股票与 ETF 名称；ETF 缺失/读取失败不影响股票。"""
     frames = []
-    for getter in (repo.get_instruments, getattr(repo, "get_etf_instruments", None)):
+    for getter, asset_type in ((repo.get_instruments, 'stock'),
+                               (getattr(repo, "get_etf_instruments", None), 'etf')):
         if getter is None:
             continue
         try:
             instruments = getter()
             if not instruments.is_empty() and {"symbol", "name"}.issubset(instruments.columns):
                 cols = [c for c in ["symbol", "name", "float_shares"] if c in instruments.columns]
-                frames.append(instruments.select(cols))
+                frames.append(instruments.select(cols).with_columns(
+                    pl.col("name").cast(pl.String).str.strip_chars().replace("", None),
+                    pl.lit(asset_type).alias('asset_type')))
         except Exception as e:  # noqa: BLE001
             logger.debug("read watchlist instruments failed: %s", e)
     if not frames:
         return pl.DataFrame()
-    return pl.concat(frames, how="diagonal_relaxed").unique(subset=["symbol"], keep="first")
+    combined = pl.concat(frames, how="diagonal_relaxed")
+    return combined.group_by("symbol", maintain_order=True).agg(
+        [pl.col(c).drop_nulls().last() if c == 'asset_type' else pl.col(c).drop_nulls().first()
+         for c in combined.columns if c != "symbol"])
 
 
 def _with_names(rows: list[dict], request: Request) -> list[dict]:
@@ -170,11 +176,18 @@ def watchlist_enriched(
     # JOIN instruments 取 name + float_shares
     df_i = _watchlist_instruments(repo)
     if not df_i.is_empty() and "name" in df_i.columns:
-        inst_cols = [c for c in ["symbol", "name", "float_shares"] if c in df_i.columns]
-        df = df.join(df_i.select(inst_cols), on="symbol", how="left")
+        inst_cols = [c for c in ["symbol", "name", "float_shares", "asset_type"] if c in df_i.columns]
+        renamed = {c: f"_instrument_{c}" for c in inst_cols if c != "symbol"}
+        df = df.join(df_i.select(inst_cols).rename(renamed), on="symbol", how="left")
+        # 价量缓存可能自带name列；显式合并，避免ETF的空name遮住维表名称。
+        for column, reference in renamed.items():
+            values = [pl.col(reference)]
+            if column in df.columns:
+                values.append(pl.col(column))
+            df = df.with_columns(pl.coalesce(values).alias(column)).drop(reference)
 
     # 选择内置需要的列
-    keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares"] if c in df.columns]
+    keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares", "asset_type"] if c in df.columns]
     df = df.select(keep)
 
     # 动态 JOIN 扩展数据表

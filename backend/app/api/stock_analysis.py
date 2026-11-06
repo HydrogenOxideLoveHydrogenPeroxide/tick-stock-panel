@@ -18,11 +18,12 @@ from datetime import date, timedelta
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Literal
 
 from app.indicators.levels import compute_levels, summarize_levels
 from app.services import stock_reports
-from app.services.stock_analyzer import analyze_stock_stream
+from app.services.stock_analyzer import analyze_stock_stream, _is_etf
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ def get_levels(
     repo = request.app.state.repo
     end = date.today()
     start = end - timedelta(days=days * 2)
-    df = repo.get_daily(symbol, start, end)
+    df = repo.get_etf_daily(symbol, start, end) if _is_etf(repo, symbol) else repo.get_daily(symbol, start, end)
     if df.is_empty():
         return {"levels": {"sr": [], "pivot": [], "extreme": [],
                            "boll": [], "keltner_s": [], "keltner_m": [], "keltner_l": [],
@@ -147,7 +148,21 @@ def get_levels(
 class AnalyzeRequest(BaseModel):
     """AI 个股分析请求。"""
     symbol: str
-    focus: str = ""  # 可选:用户追加的分析关注点
+    focus: str = Field(default="", max_length=2000)  # 可选:用户追加的分析关注点
+    mode: Literal["existing", "morning", "noon", "tail"] = "existing"
+    include_news: bool = False
+
+
+@router.get("/context")
+async def preview_context(request: Request, symbol: str,
+                          mode: Literal["morning", "noon", "tail"] = "morning",
+                          include_news: bool = False):
+    """免费行情预览，不调用AI、不写日K或报告。"""
+    from app.services.market_sources import fetch_market_context
+    try:
+        return await fetch_market_context(request.app.state.repo, symbol, mode, include_news)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.post("/analyze")
@@ -164,7 +179,7 @@ async def analyze_stock(request: Request, req: AnalyzeRequest):
     data_dir = repo.store.data_dir
 
     async def stream_gen():
-        async for chunk in analyze_stock_stream(repo, data_dir, req.symbol, req.focus):
+        async for chunk in analyze_stock_stream(repo, data_dir, req.symbol, req.focus, mode=req.mode, include_news=req.include_news):
             yield chunk + "\n"
 
     return StreamingResponse(
@@ -187,6 +202,7 @@ class SaveReportRequest(BaseModel):
     summary: str = ""
     close: float | None = None
     levels: dict | None = None
+    data_context: dict | None = None
 
 
 @router.get("/reports")
@@ -206,6 +222,7 @@ def save_report(request: Request, req: SaveReportRequest):
         "summary": req.summary,
         "close": req.close,
         "levels": req.levels,
+        "data_context": req.data_context,
     })
     return {"ok": True, "report": report}
 
