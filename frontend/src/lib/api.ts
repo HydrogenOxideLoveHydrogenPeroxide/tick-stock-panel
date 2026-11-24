@@ -400,13 +400,14 @@ export interface StrategyDetail {
   order_by: string
   descending: boolean
   limit: number
+  historical_research?: string | null
   backtest_defaults?: {
     start?: string | null
     end?: string | null
     entry_fill: 'close_t' | 'open_t+1'
     exit_fill: 'close_t' | 'open_t+1'
     commission_pct: number
-    stamp_tax_pct: number
+    stamp_tax_pct: number | null
     slippage_bps: number
     max_positions: number
     max_exposure_pct: number
@@ -1215,7 +1216,7 @@ export const api = {
     exit_fill?: 'close_t' | 'open_t+1' | null
     fees_pct?: number
     commission_pct?: number
-    stamp_tax_pct?: number
+    stamp_tax_pct?: number | null
     slippage_bps?: number
     max_positions?: number
     initial_capital?: number

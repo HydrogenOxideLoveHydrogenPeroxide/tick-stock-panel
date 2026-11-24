@@ -34,6 +34,14 @@ class ReviewedDividendTests(unittest.TestCase):
         self.assertEqual(self.strategy.entry_signals,[])
         self.assertIsNone(self.strategy.stop_loss)
 
+    def test_web_defaults_use_monthly_open_and_historical_tax(self):
+        defaults = self.strategy.meta['backtest_defaults']
+        self.assertEqual(defaults['entry_fill'], 'open_t+1')
+        self.assertEqual(defaults['exit_fill'], 'open_t+1')
+        self.assertIsNone(defaults['stamp_tax_pct'])
+        self.assertEqual(defaults['position_sizing'], 'equal')
+        self.assertEqual(self.strategy.meta['historical_research'], 'dividend_monthly_v1')
+
     def test_future_fundamentals_rejected(self):
         frame=pl.DataFrame([{**self.base,'fundamentals_available_date':date(2026,11,24)}])
         with self.assertRaisesRegex(ValueError,'未来数据'):

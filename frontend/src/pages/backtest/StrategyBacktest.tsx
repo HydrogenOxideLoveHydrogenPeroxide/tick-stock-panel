@@ -724,6 +724,8 @@ export function StrategyBacktest() {
     enabled: !!selectedStrategy,
   })
 
+  const isMonthlyDividend = strategyDetail.data?.historical_research === 'dividend_monthly_v1'
+
   const backtestTask = useBacktestTask()
   const isPending = backtestTask?.isPending ?? false
 
@@ -747,7 +749,7 @@ export function StrategyBacktest() {
       setEntryFill(defaults.entry_fill)
       setExitFill(defaults.exit_fill)
       setFees(String(defaults.commission_pct * 10000))
-      setStampTax(String(defaults.stamp_tax_pct * 1000))
+      setStampTax(defaults.stamp_tax_pct == null ? '' : String(defaults.stamp_tax_pct * 1000))
       setSlippage(String(defaults.slippage_bps))
       setMaxPositions(String(defaults.max_positions))
       setMaxExposure(String(defaults.max_exposure_pct * 100))
@@ -768,6 +770,11 @@ export function StrategyBacktest() {
     const detail = strategyDetail.data
     if (!detail || loadedStrategyRef.current === detail.id) return
     loadedStrategyRef.current = detail.id
+    // Monthly portfolio rules must migrate cached generic timing/tax/technical settings.
+    if (detail.historical_research === 'dividend_monthly_v1') {
+      resetConfigFromDetail(detail)
+      return
+    }
     if (saved?.selectedStrategy === detail.id && (saved.params || saved.overrides)) {
       setStrategyParams(saved.params ?? strategyDefaultParams(detail))
       setOverrides(saved.overrides ?? buildDefaultOverrides(detail))
@@ -816,10 +823,10 @@ export function StrategyBacktest() {
       start: start || null,
       end: end || undefined,
       matching,
-      entry_fill: entryFill,
-      exit_fill: exitFill,
+      entry_fill: isMonthlyDividend ? 'open_t+1' : entryFill,
+      exit_fill: isMonthlyDividend ? 'open_t+1' : exitFill,
       commission_pct: Number(fees) / 10000,
-      stamp_tax_pct: Number(stampTax) / 1000,
+      stamp_tax_pct: isMonthlyDividend ? undefined : Number(stampTax) / 1000,
       slippage_bps: Number(slippage),
       max_positions: Number(maxPositions),
       max_exposure_pct: Number(maxExposure) / 100,
@@ -827,7 +834,7 @@ export function StrategyBacktest() {
       position_sizing: positionSizing,
       params: strategyParams,
       overrides,
-      mode: simMode,
+      mode: isMonthlyDividend ? 'position' : simMode,
       holding_days: Number(holdingDays) || 5,
     })
   }
@@ -1287,20 +1294,20 @@ export function StrategyBacktest() {
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">建仓口径</label>
-            <select value={entryFill} onChange={e => setEntryFill(e.target.value as any)} className={INPUT_CLS}>
+            <select disabled={isMonthlyDividend} value={entryFill} onChange={e => setEntryFill(e.target.value as any)} className={INPUT_CLS}>
               <option value="open_t+1">次日开盘成交（推荐）</option>
               <option value="close_t">信号日收盘成交</option>
             </select>
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">清仓口径</label>
-            <select value={exitFill} onChange={e => setExitFill(e.target.value as any)} className={INPUT_CLS}>
+            <select disabled={isMonthlyDividend} value={exitFill} onChange={e => setExitFill(e.target.value as any)} className={INPUT_CLS}>
               <option value="close_t">到期/信号日收盘成交（推荐）</option>
               <option value="open_t+1">次日开盘成交</option>
             </select>
           </div>
         </div>
-        <div className="mt-1 text-[10px] leading-4 text-muted">建仓默认次日开盘（避免未来函数），清仓默认当日收盘（持仓中可盘中/收盘卖）；买卖点由策略触发器决定，这里只决定成交价。</div>
+        <div className="mt-1 text-[10px] leading-4 text-muted">{isMonthlyDividend ? '月末收盘选股，下一交易日开盘同时执行买入与卖出；按月调仓。' : '建仓默认次日开盘（避免未来函数），清仓默认当日收盘（持仓中可盘中/收盘卖）；买卖点由策略触发器决定，这里只决定成交价。'}</div>
 
         {simMode === 'position' && (
         <div className="grid grid-cols-2 gap-2">
@@ -1311,7 +1318,7 @@ export function StrategyBacktest() {
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">买入权重</label>
-            <select value={positionSizing} onChange={e => setPositionSizing(e.target.value as any)} className={INPUT_CLS}>
+            <select disabled={isMonthlyDividend} value={positionSizing} onChange={e => setPositionSizing(e.target.value as any)} className={INPUT_CLS}>
               <option value="equal">等权买入</option>
               <option value="score_weight">评分加权</option>
             </select>
@@ -1332,7 +1339,7 @@ export function StrategyBacktest() {
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">印花税(千分之)</label>
-            <input type="number" min={0} value={stampTax} onChange={e => setStampTax(e.target.value)} className={INPUT_CLS} />
+            <input type="number" disabled={isMonthlyDividend} placeholder={isMonthlyDividend ? '按历史政策自动计算' : undefined} min={0} value={stampTax} onChange={e => setStampTax(e.target.value)} className={INPUT_CLS} />
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">滑点(万分之)</label>
@@ -1380,12 +1387,14 @@ export function StrategyBacktest() {
 
       {/* 结果面板 */}
       <section className="min-w-0 space-y-3 bg-base/15 px-3 py-3 xl:overflow-y-auto">
+        {isMonthlyDividend && <p className="rounded-btn border border-accent/30 p-3 text-xs text-secondary">月度组合历史研究：月初调仓、买卖均按下一交易日开盘、等权持仓，印花税按历史政策计算。已载入策略配置，迁移旧的浏览器缓存设置。历史档案截至2026-11-24，股息率固定3%；原始财报版本未核验。</p>}
         {/* 模式切换: 仓位模拟 / 全量模拟 */}
         <div className="flex items-center justify-between gap-2">
           <div className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
             {([['position', '仓位模拟'], ['full', '全量模拟']] as const).map(([val, label]) => (
               <button
                 key={val}
+                disabled={isMonthlyDividend && val === 'full'}
                 onClick={() => setSimMode(val)}
                 className={`inline-flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
                   simMode === val
@@ -1979,7 +1988,7 @@ export function StrategyBacktest() {
 
               {settingsTab === 'range' && (
                 <ConfigSection title="回测范围">
-                  <StockPoolPicker value={symbols} onChange={setSymbols} />
+                  {isMonthlyDividend ? <p className="text-xs text-muted">按历史全市场筛选，不使用当前自选股票池。</p> : <StockPoolPicker value={symbols} onChange={setSymbols} />}
                   <div className="text-[11px] leading-5 text-muted">默认全市场回测，由基础过滤、策略条件和买卖触发器筛选；需要单票调试或自选池回测时再限定股票池。</div>
                 </ConfigSection>
               )}
