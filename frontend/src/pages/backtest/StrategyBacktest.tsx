@@ -1,3 +1,4 @@
+import { DividendResearchNotice } from '@/components/backtest/DividendResearchNotice'
 import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
@@ -1611,6 +1612,8 @@ export function StrategyBacktest() {
                 )}
               </div>
             )}
+
+            <DividendResearchNotice warning={result.stats.research_warning} orders={result.stats.research_orders} />
 
             {/* 统计卡片 */}
             <div className="rounded-card border border-border bg-surface p-4">

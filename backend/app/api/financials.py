@@ -5,7 +5,7 @@ import logging
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 
 from app.services.financial_sync import get_financial_df
@@ -228,3 +228,26 @@ def delete_report(request: Request, report_id: str):
         capset.require(Cap.FINANCIAL)
     ok = ai_reports.delete_report(report_id)
     return {"ok": ok}
+
+
+@router.get("/dividend-backtest")
+def dividend_backtest_status(request: Request):
+    from app.research.dividend_adapter import RELATIVE, history_info
+    from app.research.dividend_history import read
+    folder=request.app.state.repo.store.data_dir / RELATIVE
+    progress=read(folder/'progress.json') if (folder/'progress.json').exists() else None
+    return {**history_info(request.app.state.repo.store.data_dir),"progress":progress,
+            "report_ready":(folder/'report/index.html').is_file()}
+
+
+@router.get("/dividend-backtest/files/{name}")
+def dividend_backtest_file(name: str, request: Request):
+    from app.research.dividend_adapter import RELATIVE
+    allowed={"index.html":"text/html","performance.png":"image/png","result.json":"application/json",
+             "sensitivity.json":"application/json","orders.csv":"text/csv","equity.csv":"text/csv"}
+    if name not in allowed:raise HTTPException(404,"研究文件不存在")
+    folder=(request.app.state.repo.store.data_dir / RELATIVE / 'report').resolve()
+    path=folder/name
+    if not path.is_file() or path.is_symlink():raise HTTPException(404,"研究报告尚未生成")
+    return FileResponse(path,media_type=allowed[name],filename=name,
+                        content_disposition_type='inline' if name.endswith(('.html','.png')) else 'attachment')

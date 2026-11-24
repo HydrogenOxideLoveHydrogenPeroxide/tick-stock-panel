@@ -117,7 +117,7 @@ TickFlowStockPanel-macos*.zip
 
 # Local service state, raw source probes and generated research evidence
 .run/
-research/
+/research/
 
 # Regenerable local dependency audit outputs
 backend/audit-python-local.json

@@ -105,6 +105,10 @@ class DividendSnapshotTests(unittest.TestCase):
         events=[self.event(),self.event(EX_DIVIDEND_DATE='2026-06-01',REPORT_DATE='2026-03-31',PRETAX_BONUS_RMB=None,BONUS_IT_RATIO=4,IMPL_PLAN_PROFILE='10转4股')]
         self.assertAlmostEqual(ds.cash_dividends(events,date(2026,11,24))['600829.SH'],.2/1.4)
 
+    def test_older_pure_transfer_profile_without_share_suffix(self):
+        events=[self.event(),self.event(EX_DIVIDEND_DATE='2026-06-01',REPORT_DATE='2026-03-31',PRETAX_BONUS_RMB=None,BONUS_IT_RATIO=4,IMPL_PLAN_PROFILE='10转4.00')]
+        self.assertAlmostEqual(ds.cash_dividends(events,date(2026,11,24))['600829.SH'],.2/1.4)
+
     def test_missing_amount_not_fabricated_as_zero(self):
         with self.assertRaises(ValueError):ds.cash_dividends([self.event(PRETAX_BONUS_RMB=None)],date(2026,11,24))
 
@@ -120,6 +124,7 @@ class DividendSnapshotTests(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         engine=StrategyEngine(lambda d: self.fail('prices loaded'),strategy_files=[root/'app/strategy/reviewed/ai_mwum51zl.py'])
         # Method only needs these attributes before returning the early error.
+        engine.get("ai_mwum51zl").meta.pop("historical_research", None)
         service=StrategyBacktestService.__new__(StrategyBacktestService)
         service.strategy_engine=engine
         result=service.run(StrategyBacktestConfig(strategy_id='ai_mwum51zl',symbols=['600829.SH'],start=date(2020,1,1),end=date(2020,2,1)))

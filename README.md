@@ -1,3 +1,5 @@
+> 新增月度历史重建研究回测：同一菜场大妈策略支持独立历史归档、月初组合撮合及成本对照；公开财报原始版本未核验，详见[数据与回测口径](docs/public-financials.md)。
+
 > 新增公开财务与分红数据：默认无需 TickFlow Expert，使用方式、GitHub 来源及当前选股/历史回测边界见 [公开财务说明](docs/public-financials.md)。
 
 > 本分支的本地量化扩展、配套策略库固定版本及数据准备：见 [LOCAL_QUANT_SETUP.md](LOCAL_QUANT_SETUP.md)。源码发布不包含持仓、行情缓存或历史研究归档。

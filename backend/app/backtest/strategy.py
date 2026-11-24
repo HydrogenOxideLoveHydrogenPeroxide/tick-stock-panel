@@ -99,6 +99,14 @@ class StrategyBacktestService:
         except ValueError as e:
             return _err(str(e))
 
+        if s.meta.get("historical_research") == "dividend_monthly_v1":
+            from app.research.dividend_adapter import build_result
+            try:
+                return build_result(config, self.engine.repo.store.data_dir, s,
+                                    progress_cb=progress_cb, cancel_event=cancel_event)
+            except (ValueError, FileNotFoundError) as exc:
+                return _err(str(exc))
+
         if s.meta.get("current_snapshot_only"):
             return _err("该策略使用当前公开财报/分红/证券名单快照，不支持历史回测；需历史PIT数据及月度组合撮合后才能回测")
 

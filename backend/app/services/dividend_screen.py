@@ -34,7 +34,7 @@ def cash_dividends(events, as_of):
         if event.get('ASSIGN_PROGRESS')!='实施分配':continue
         if cash is None:
             # Some explicit pure-share transfer plans encode cash as null.
-            plan=re.fullmatch(r'10(?:送|转)([0-9.]+)股',str(event.get('IMPL_PLAN_PROFILE','')))
+            plan=re.fullmatch(r'10(?:送|转)([0-9.]+)股?',str(event.get('IMPL_PLAN_PROFILE','')))
             if plan and bonus>0 and abs(float(plan[1])-bonus)<1e-5:
                 cash=0.
         if cash is None or cash<0 or bonus<0:raise ValueError('分红金额或送转比例缺失/无效，不能按零处理')

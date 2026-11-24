@@ -35,6 +35,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Explicit historical research collection/reporting; never fetched on startup.
+research = ["baostock==0.9.4", "matplotlib==3.10.9"]
+
 # Legacy CPU runtime: install the Polars compatibility kernel on
 # machines without AVX2/FMA support.
 # Enable with: uv sync --extra legacy-cpu

@@ -77,7 +77,11 @@ def history(request: Request, strategy_id: str | None = None):
     raw = False
     if strategy_id:
         try:
-            raw = request.app.state.strategy_engine.get(strategy_id).meta.get("price_basis") == "raw"
+            strategy=request.app.state.strategy_engine.get(strategy_id)
+            if strategy.meta.get('historical_research') == 'dividend_monthly_v1':
+                from app.research.dividend_adapter import history_info
+                return history_info(request.app.state.repo.store.data_dir)
+            raw = strategy.meta.get("price_basis") == "raw"
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="策略不存在") from exc
     return _get_engine(request).repo.history_info(raw=raw)
