@@ -693,7 +693,7 @@ def _maybe_push_review(content: str, meta: dict) -> None:
     推送失败静默降级 (Webhook 是辅助通道), 不影响已归档的报告。
     """
     try:
-        from app.services import preferences, webhook_adapter
+        from app.services import preferences, feishu_delivery
 
         channels = preferences.get_review_push_channels()
         if not channels:
@@ -705,14 +705,10 @@ def _maybe_push_review(content: str, meta: dict) -> None:
 
         for ch in channels:
             if ch == "feishu":
-                url = preferences.get_feishu_webhook_url()
-                if not url:
-                    logger.info("review push(feishu) skipped: webhook not configured")
+                if not feishu_delivery.is_configured():
+                    logger.info("review push(feishu) skipped: channel not configured")
                     continue
-                secret = preferences.get_feishu_webhook_secret()
-                ok = webhook_adapter.send_feishu_card(
-                    url, "TickFlow · 每日复盘", subtitle, content, secret
-                )
+                ok = feishu_delivery.send("TickFlow · 每日复盘", content, subtitle=subtitle, rich=True)
                 logger.info("review push(feishu) %s", "sent" if ok else "failed")
             # 未来更多渠道在此追加分支
     except Exception as e:  # noqa: BLE001

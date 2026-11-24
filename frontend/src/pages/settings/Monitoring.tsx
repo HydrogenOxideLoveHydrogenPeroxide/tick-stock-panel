@@ -64,6 +64,17 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const minInterval = intervalData?.min_interval ?? 5
   const maxInterval = intervalData?.max_interval ?? 60
   const [intervalDraft, setIntervalDraft] = useState(interval)
+  const feishuApp = prefs?.feishu_app
+  const feishuConfigured = !!(feishuApp?.enabled || prefs?.feishu_webhook_url)
+  const testFeishu = useMutation({
+    mutationFn: () => api.testFeishuPush(),
+    onSuccess: () => toast('飞书已确认接收测试消息', 'success'),
+    onError: () => toast('推送失败，请检查机器人配置', 'error'),
+  })
+  const toggleFeishuApp = useMutation({
+    mutationFn: (enabled: boolean) => api.updateFeishuApp(enabled),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
+  })
   const feishuWebhookUrl = prefs?.feishu_webhook_url ?? ''
   const feishuWebhookSecret = prefs?.feishu_webhook_secret ?? ''
   const [feishuDraft, setFeishuDraft] = useState(feishuWebhookUrl)
@@ -405,12 +416,12 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                   className="h-3 w-3 accent-accent cursor-pointer"
                 />
                 <span className="text-[11px] font-medium text-foreground">飞书</span>
-                <span className="text-[9px] text-muted">群机器人</span>
+                <span className="text-[9px] text-muted">{feishuApp?.enabled ? feishuApp.name : '群机器人'}</span>
                 {webhookDefault && (
                   <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
                 )}
-                <span className={`ml-auto text-[9px] ${feishuWebhookUrl ? 'text-emerald-500' : 'text-warning'}`}>
-                  {feishuWebhookUrl ? '已配置' : '未配置'}
+                <span className={`ml-auto text-[9px] ${feishuConfigured ? 'text-emerald-500' : 'text-warning'}`}>
+                  {feishuConfigured ? '已配置' : '未配置'}
                 </span>
                 <ChevronDown className={`h-3 w-3 text-muted transition-transform ${channelOpen ? 'rotate-180' : ''}`} />
               </div>
@@ -418,6 +429,21 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               {/* 飞书地址配置 — 行内展开 */}
               {channelOpen && (
                 <div className="border-t border-border/60 bg-base/30 p-3">
+                  {feishuApp?.configured && (
+                    <div className="mb-3 rounded-btn border border-accent/30 p-3 text-xs">
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={feishuApp.enabled} disabled={toggleFeishuApp.isPending}
+                          onChange={e => toggleFeishuApp.mutate(e.target.checked)} />
+                        <span>{feishuApp.name} · 应用机器人</span>
+                      </label>
+                      <p className="mt-2 text-muted">接收位置：{feishuApp.recipient}。使用现有应用身份，凭据由服务器管理；启用后优先通过此通道通报。</p>
+                    </div>
+                  )}
+                  {feishuConfigured && <button onClick={() => testFeishu.mutate()} disabled={testFeishu.isPending}
+                    className="mb-3 rounded-btn bg-accent px-3 py-1.5 text-xs text-base disabled:opacity-50">
+                    {testFeishu.isPending ? '发送中…' : '发送测试通知'}
+                  </button>}
+                  <p className="mb-2 text-[11px] text-muted">群 Webhook（可选独立通道）</p>
                   <label className="block space-y-1.5">
                     <span className="text-[11px] text-muted">Webhook 地址</span>
                     <input

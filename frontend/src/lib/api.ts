@@ -739,6 +739,7 @@ export interface Preferences {
   strategy_monitor_enabled: boolean
   strategy_monitor_ids: string[]
   system_notify_enabled: boolean
+  feishu_app?: { configured: boolean; enabled: boolean; name: string; recipient: string }
   feishu_webhook_url?: string
   feishu_webhook_secret?: string
   webhook_enabled_default?: boolean
@@ -898,6 +899,8 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
     }),
+  testFeishuPush: () => request<{ ok: boolean }>('/api/settings/preferences/feishu-test', { method: 'POST' }),
+  updateFeishuApp: (enabled: boolean) => request('/api/settings/preferences/feishu-app', { method: 'PUT', body: JSON.stringify({ enabled }) }),
   updateFeishuWebhook: (url: string, secret: string = '') =>
     request<{ feishu_webhook_url: string; feishu_webhook_secret: string }>('/api/settings/preferences/feishu-webhook', {
       method: 'PUT',

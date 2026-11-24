@@ -845,12 +845,10 @@ class QuoteService:
         """
         try:
             from app.services import preferences
-            from app.services import webhook_adapter
+            from app.services import feishu_delivery
 
-            url = preferences.get_feishu_webhook_url()
-            if not url:
+            if not feishu_delivery.is_configured():
                 return
-            secret = preferences.get_feishu_webhook_secret()
 
             # 反查规则, 过滤出启用推送的事件
             source_labels = {
@@ -870,7 +868,7 @@ class QuoteService:
                 message = ev.get("message") or ""
                 title = f"TickFlow · {source_label}"
                 body = f"{symbol} {name} {message}".strip() if symbol else (message or name)
-                if webhook_adapter.send_feishu(url, title, body, secret):
+                if feishu_delivery.send(title, body):
                     pushed += 1
             if pushed:
                 logger.info("飞书 Webhook 推送: %d 条", pushed)

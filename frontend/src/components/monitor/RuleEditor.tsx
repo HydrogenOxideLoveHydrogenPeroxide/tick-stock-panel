@@ -45,7 +45,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const options = useQuery({ queryKey: QK.monitorRuleOptions, queryFn: api.monitorRuleOptions })
   const strategies = useQuery({ queryKey: QK.screenerStrategies, queryFn: api.screenerStrategies })
   const { data: prefs } = usePreferences()
-  const feishuConfigured = !!(prefs?.feishu_webhook_url)
+  const feishuConfigured = !!(prefs?.feishu_webhook_url || prefs?.feishu_app?.enabled)
   const [editing] = useState(!!rule)
   // 新建规则: 预填全局「默认推送渠道」(飞书), preset 显式指定时以 preset 为准。
   // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
@@ -394,7 +394,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               className="h-3 w-3 accent-accent cursor-pointer"
             />
             <span className="text-[11px] text-foreground">飞书</span>
-            <span className="text-[9px] text-muted">群机器人</span>
+            <span className="text-[9px] text-muted">通知机器人</span>
             {draft.webhook_enabled && (
               <span className={`ml-auto text-[9px] ${feishuConfigured ? 'text-emerald-500' : 'text-warning'}`}>
                 {feishuConfigured ? '已配置' : '未配置'}
@@ -420,13 +420,13 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         {/* 飞书勾选但全局未配置 → 提示前往设置 */}
         {draft.webhook_enabled && !feishuConfigured && (
           <p className="text-[10px] leading-relaxed text-warning/80">
-            飞书 Webhook 地址尚未配置,
+            飞书推送通道尚未配置,
             <Link to="/settings?tab=monitoring" className="text-accent hover:text-accent/80">前往设置页配置 →</Link>
           </p>
         )}
         {draft.webhook_enabled && feishuConfigured && (
           <p className="text-[10px] leading-relaxed text-muted">
-            命中本规则时,告警将推送到设置页配置的飞书群。
+            命中本规则时,告警将推送到设置页配置的飞书接收人或群。
           </p>
         )}
       </div>

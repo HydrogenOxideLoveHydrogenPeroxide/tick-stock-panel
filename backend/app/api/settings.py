@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from app.services import feishu_delivery
+
 import logging
 import time
 
@@ -361,6 +363,7 @@ def get_preferences() -> dict:
         "strategy_monitor_enabled": preferences.get_strategy_monitor_enabled(),
         "strategy_monitor_ids": preferences.get_strategy_monitor_ids(),
         "system_notify_enabled": preferences.get_system_notify_enabled(),
+        "feishu_app": feishu_delivery.app_status(),
         "feishu_webhook_url": preferences.get_feishu_webhook_url(),
         "feishu_webhook_secret": preferences.get_feishu_webhook_secret(),
         "webhook_enabled_default": preferences.get_webhook_enabled_default(),
@@ -1093,3 +1096,26 @@ def update_review_push(req: ReviewPushIn) -> dict:
     saved = preferences.set_review_push_channels(req.channels)
     return {"review_push_channels": saved}
 
+
+
+class FeishuAppPrefsIn(BaseModel):
+    enabled: bool
+
+
+@router.put("/preferences/feishu-app")
+def update_feishu_app(req: FeishuAppPrefsIn) -> dict:
+    from app.services import preferences, feishu_delivery
+    if req.enabled and not feishu_delivery.app_status()["configured"]:
+        raise HTTPException(status_code=400, detail="应用机器人尚未由管理员配置")
+    preferences.save({"feishu_app_enabled": req.enabled})
+    return feishu_delivery.app_status()
+
+
+@router.post("/preferences/feishu-test")
+def test_feishu_delivery() -> dict:
+    from app.services import feishu_delivery
+    if not feishu_delivery.is_configured():
+        raise HTTPException(status_code=400, detail="请先配置飞书推送通道")
+    if not feishu_delivery.send("TickFlow · 推送连接测试", "Orange Pi 飞书通知已连接。启用推送的监控规则命中后，会通过此机器人向你通报；这是一条测试消息。"):
+        raise HTTPException(status_code=502, detail="飞书未确认接收，请检查机器人连接或接收人权限")
+    return {"ok": True}

@@ -103,7 +103,7 @@ export function Review() {
   const [showSchedule, setShowSchedule] = useState(false)
   const prefs = usePreferences()
   const reviewSched = prefs.data?.review_schedule ?? { enabled: false, hour: 15, minute: 10 }
-  const feishuConfigured = !!(prefs.data?.feishu_webhook_url)
+  const feishuConfigured = !!(prefs.data?.feishu_webhook_url || prefs.data?.feishu_app?.enabled)
   // 推送渠道是独立的顶层偏好(多选), 与定时 / 实时行情无关, 常驻可单独设置
   // []=不推送, ['feishu']=飞书(微信开发中, 仅占位)
   const reviewPushChannels = prefs.data?.review_push_channels ?? []
@@ -438,7 +438,7 @@ export function Review() {
                       {reviewPushChannels.includes('feishu') && <Check className="h-2.5 w-2.5" />}
                     </span>
                     <span className="text-[11px] text-foreground">飞书</span>
-                    <span className="text-[9px] text-muted">群机器人</span>
+                    <span className="text-[9px] text-muted">通知机器人</span>
                     <span className={cn('ml-auto text-[9px]', feishuConfigured ? 'text-emerald-500' : 'text-warning')}>
                       {feishuConfigured ? '已配置' : '未配置'}
                     </span>
@@ -452,7 +452,7 @@ export function Review() {
                   </div>
                 </div>
                 <p className="mt-1.5 text-[10px] leading-relaxed text-muted/70">
-                  手动或定时生成的复盘都会以卡片消息推送完整报告。复用「设置 → 实时监控」的飞书 Webhook。
+                  手动或定时生成的复盘会推送完整报告。复用「设置 → 实时监控」配置的飞书通道。
                   {reviewPushChannels.includes('feishu') && !feishuConfigured && (
                     <Link to="/settings?tab=monitoring" className="ml-1 text-accent hover:underline" onClick={() => setShowSchedule(false)}>
                       前往配置 →
