@@ -21,6 +21,23 @@ function load(name) {
 }
 const { renderBuiltinDataCell } = load('components/stock-table/primitives')
 const { getSortValue } = load('lib/stock-table')
+const { WATCHLIST_BOARDS, getWatchlistBoard, normalizeWatchlistBoards } = load('lib/watchlist-filters')
+test('legacy all-board preference does not hide ETF holdings after upgrade', () => {
+  const selected = normalizeWatchlistBoards(['沪主板', '深主板', '创业板', '科创板', '北交所'])
+  assert.equal(selected.size, WATCHLIST_BOARDS.length)
+  for (const symbol of ['588170.SH', '518800.SH', '159697.SZ', '601988.SH', '002685.SZ']) {
+    assert.ok(selected.has(getWatchlistBoard(symbol)), symbol)
+  }
+})
+test('partial and explicitly empty board choices remain explicit', () => {
+  const selected = normalizeWatchlistBoards(['沪主板', 'removed-category'])
+  assert.equal(selected.size, 1)
+  assert.ok(selected.has(getWatchlistBoard('601988.SH')))
+  assert.ok(!selected.has(getWatchlistBoard('588170.SH')))
+  assert.equal(normalizeWatchlistBoards([]).size, 0)
+  assert.equal(getWatchlistBoard('920001.BJ'), '北交所')
+  assert.equal(getWatchlistBoard('unknown'), '其他')
+})
 test('fund prices preserve three decimals and stocks keep two', () => {
   const priceColumn = { id: 'builtin:price', source: { type: 'builtin', key: 'price' } }
   for (const [asset_type, close, expected] of [

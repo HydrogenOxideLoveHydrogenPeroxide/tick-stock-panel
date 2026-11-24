@@ -196,7 +196,9 @@ async def _get_text(url, referer):
             _last_request = time.monotonic()
         target = await asyncio.to_thread(validate_public_https_url, url)
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, trust_env=False, follow_redirects=False) as client:
-            async with client.stream("GET", target, headers={"Accept-Encoding": "identity", "Referer": referer}) as response:
+            # Eastmoney returns HTTP 200 with an empty body for httpx's default UA.
+            async with client.stream("GET", target, headers={"Accept-Encoding": "identity", "Referer": referer,
+                                                             "User-Agent": "Mozilla/5.0"}) as response:
                 if 300 <= response.status_code < 400:
                     raise ValueError("新闻请求禁止重定向")
                 response.raise_for_status()
@@ -210,7 +212,10 @@ async def _get_text(url, referer):
                     if len(payload) + len(chunk) > MAX_RESPONSE_BYTES:
                         raise ValueError("新闻响应超过 1 MiB")
                     payload.extend(chunk)
-                return payload.decode("utf-8-sig")
+                text = payload.decode("utf-8-sig")
+                if not text.strip():
+                    raise ValueError("新闻源返回空内容，可能被上游拦截；请稍后重试")
+                return text
     # Includes DNS/thread dispatch, rate wait, connection and streamed body.
     return await asyncio.wait_for(request(), timeout=REQUEST_TIMEOUT_SECONDS)
 

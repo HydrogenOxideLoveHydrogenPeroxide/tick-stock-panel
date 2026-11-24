@@ -158,18 +158,20 @@ def watchlist_enriched(
                         cache_date = etf_date
         except Exception as e:  # noqa: BLE001
             logger.debug("read watchlist ETF enriched failed: %s", e)
-    # 已知 ETF 尚无 enriched 时只补 symbol 占位，让前端能请求已有日 K；
-    # 不补股票/未知代码，也不伪造价格或指标。名称仍由下方维表 JOIN 提供。
+    # 股票已有原始日线但不在最新 enriched 分区时，就地补算而非显示空行。
     missing = set(symbols) - set(df["symbol"].to_list() if not df.is_empty() else [])
-    if missing and hasattr(repo, "get_etf_instruments"):
-        try:
-            etf_instruments = repo.get_etf_instruments()
-            if not etf_instruments.is_empty() and "symbol" in etf_instruments.columns:
-                placeholders = etf_instruments.filter(pl.col("symbol").is_in(list(missing))).select("symbol").unique()
-                if not placeholders.is_empty():
-                    df = pl.concat([df, placeholders], how="diagonal_relaxed") if not df.is_empty() else placeholders
-        except Exception as e:  # noqa: BLE001
-            logger.debug("read watchlist ETF placeholders failed: %s", e)
+    if missing:
+        stock_instruments = repo.get_instruments()
+        known_stocks = set(stock_instruments['symbol'].to_list()) if not stock_instruments.is_empty() else set()
+        recovered = watchlist.latest_local_stock_rows(repo, sorted(missing & known_stocks), cache_date)
+        if not recovered.is_empty():
+            df = pl.concat([df, recovered], how='diagonal_relaxed') if not df.is_empty() else recovered
+    # 自选列表是用户保存的事实；缺行情也保留该行，不伪造价格或指标。
+    # 名称仍由下方维表 JOIN 提供，前端可以继续请求已有日 K。
+    missing = set(symbols) - set(df["symbol"].to_list() if not df.is_empty() else [])
+    if missing:
+        placeholders = pl.DataFrame({"symbol": sorted(missing)})
+        df = pl.concat([df, placeholders], how="diagonal_relaxed") if not df.is_empty() else placeholders
     if df.is_empty():
         return {"rows": [], "as_of": str(cache_date) if cache_date else None, "elapsed_ms": 0}
 
@@ -187,7 +189,7 @@ def watchlist_enriched(
             df = df.with_columns(pl.coalesce(values).alias(column)).drop(reference)
 
     # 选择内置需要的列
-    keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares", "asset_type"] if c in df.columns]
+    keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares", "asset_type", "date", "quote_source", "adjustment"] if c in df.columns]
     df = df.select(keep)
 
     # 动态 JOIN 扩展数据表

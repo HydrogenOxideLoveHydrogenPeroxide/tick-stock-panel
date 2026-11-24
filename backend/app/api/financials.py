@@ -12,6 +12,7 @@ from app.services.financial_sync import get_financial_df
 from app.services.financial_analyzer import analyze_financials_stream
 from app.services import ai_reports
 from app.tickflow.capabilities import Cap
+from app.services import public_financials, dividend_screen
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/api/financials", tags=["financials"])
 def financial_status(request: Request):
     """返回各财务表的同步状态。无需 FINANCIAL 权限（前端根据 available 决定是否展示）。"""
     capset = request.app.state.capabilities
-    if not capset.has(Cap.FINANCIAL):
+    if not public_financials.available(capset):
         return {"available": False, "tables": {}}
 
     data_dir = request.app.state.repo.store.data_dir
@@ -47,6 +48,10 @@ def financial_status(request: Request):
 
     return {
         "available": True,
+        "provider": "eastmoney" if public_financials.enabled() else "tickflow",
+        "limitations": public_financials.LIMITATIONS if public_financials.enabled() else [],
+        "last_error": fs.last_error if fs else None,
+        "dividend_screen": dividend_screen.status(data_dir),
         "tables": tables,
         "last_sync": last_sync,
         # 服务端是否正在同步(手动触发)——前端据此显示"同步中"并防重复点击,
@@ -59,7 +64,8 @@ def financial_status(request: Request):
 def get_metrics(request: Request, symbol: str | None = None):
     """查询核心财务指标。"""
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    if not public_financials.available(capset):
+        capset.require(Cap.FINANCIAL)
 
     df = get_financial_df(request.app.state.repo.store.data_dir, "metrics")
     if df.is_empty():
@@ -73,7 +79,8 @@ def get_metrics(request: Request, symbol: str | None = None):
 def get_income(request: Request, symbol: str | None = None):
     """查询利润表。"""
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    if not public_financials.available(capset):
+        capset.require(Cap.FINANCIAL)
 
     df = get_financial_df(request.app.state.repo.store.data_dir, "income")
     if df.is_empty():
@@ -87,7 +94,8 @@ def get_income(request: Request, symbol: str | None = None):
 def get_balance_sheet(request: Request, symbol: str | None = None):
     """查询资产负债表。"""
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    if not public_financials.available(capset):
+        capset.require(Cap.FINANCIAL)
 
     df = get_financial_df(request.app.state.repo.store.data_dir, "balance_sheet")
     if df.is_empty():
@@ -101,7 +109,8 @@ def get_balance_sheet(request: Request, symbol: str | None = None):
 def get_cash_flow(request: Request, symbol: str | None = None):
     """查询现金流量表。"""
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    if not public_financials.available(capset):
+        capset.require(Cap.FINANCIAL)
 
     df = get_financial_df(request.app.state.repo.store.data_dir, "cash_flow")
     if df.is_empty():
@@ -120,9 +129,10 @@ def sync_table(request: Request, table: str):
     前端通过轮询 GET /status 的 syncing 字段观察进度。
     """
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    if not public_financials.available(capset):
+        capset.require(Cap.FINANCIAL)
 
-    valid_tables = {"metrics", "income", "balance_sheet", "cash_flow", "all"}
+    valid_tables = {"metrics", "income", "balance_sheet", "cash_flow", "dividend_screen", "all"}
     if table not in valid_tables:
         raise HTTPException(400, f"invalid table: {table}, expected one of {valid_tables}")
 
@@ -151,7 +161,8 @@ async def analyze_financials(request: Request, req: AnalyzeRequest):
     以便前端用 ReadableStream 逐行解析,更简单可靠)。
     """
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    if not public_financials.available(capset):
+        capset.require(Cap.FINANCIAL)
 
     if not req.symbol:
         raise HTTPException(400, "symbol 不能为空")
@@ -187,7 +198,7 @@ class SaveReportRequest(BaseModel):
 def list_reports(request: Request):
     """获取全部历史报告(按时间降序,后端已裁剪到上限)。无需 FINANCIAL 能力读取列表元信息。"""
     capset = request.app.state.capabilities
-    if not capset.has(Cap.FINANCIAL):
+    if not public_financials.available(capset):
         return {"reports": []}
     return {"reports": ai_reports.list_reports()}
 
@@ -196,7 +207,8 @@ def list_reports(request: Request):
 def save_report(request: Request, req: SaveReportRequest):
     """保存一条报告。"""
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    if not public_financials.available(capset):
+        capset.require(Cap.FINANCIAL)
     report = ai_reports.save_report({
         "symbol": req.symbol,
         "name": req.name,
@@ -212,6 +224,7 @@ def save_report(request: Request, req: SaveReportRequest):
 def delete_report(request: Request, report_id: str):
     """删除一条报告。"""
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    if not public_financials.available(capset):
+        capset.require(Cap.FINANCIAL)
     ok = ai_reports.delete_report(report_id)
     return {"ok": ok}

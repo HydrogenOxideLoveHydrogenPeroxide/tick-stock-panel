@@ -28,8 +28,8 @@ const TABLE_ICON: Record<string, typeof FileText> = {
 
 export function Financials() {
   const { data: caps } = useCapabilities()
-  const hasFinancial = caps?.capabilities?.['financial'] != null
   const { data: status, isLoading } = useFinancialStatus()
+  const hasFinancial = status?.available === true || caps?.capabilities?.['financial'] != null
   const syncMut = useFinancialSync()
   // 同步进行中 = 服务端真值(status.syncing)或本地乐观态(请求已发出待确认)。
   // 乐观窗口:点击后到 invalidate 触发的 refetch 返回之间,status.syncing 暂为 false,
@@ -57,10 +57,10 @@ export function Financials() {
     rememberStock(symbol, name)
   }
 
-  if (!hasFinancial) {
+  if (!isLoading && !hasFinancial) {
     return (
       <>
-        <PageHeader title="财务分析" subtitle="利润表 / 资负表 / 现金流 / 关键指标 / AI分析 · Expert" />
+        <PageHeader title="财务分析" subtitle={status?.provider === "eastmoney" ? "公开财务数据 · 东方财富（参考 AKShare）· 当前修订版，不保证历史时点版本" : "利润表 / 资负表 / 现金流 / 关键指标 / AI分析"} />
         <div className="px-8 py-10">
           <div className="mx-auto max-w-md rounded-card border border-warning/30 bg-warning/[0.04] p-8 text-center">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-warning/10">
@@ -157,7 +157,7 @@ export function Financials() {
     <>
       <PageHeader
         title="财务分析"
-        subtitle="利润表 / 资负表 / 现金流 / 关键指标 / AI分析 · Expert"
+        subtitle={status?.provider === "eastmoney" ? "公开财务数据 · 东方财富（参考 AKShare）· 当前修订版，不保证历史时点版本" : "利润表 / 资负表 / 现金流 / 关键指标 / AI分析"}
         right={
           <div className="flex items-center gap-2">
             <LastStockChip stock={lastStock} onSelect={pick} />
@@ -187,10 +187,16 @@ export function Financials() {
       />
 
       <div className="px-8 py-6 space-y-6 max-w-7xl">
+        {status?.last_error && <div role="alert" className="rounded border border-warning/30 p-3 text-sm text-warning">财务同步失败：{status.last_error}。已保留上次成功的数据。</div>}
+        {status?.provider === 'eastmoney' && <div className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-border p-4 text-sm">
+          <div><div className="font-medium">菜场大妈 · 当前收盘筛选数据</div><div className="mt-1 text-xs text-secondary">{status.dividend_screen ? `${status.dividend_screen.as_of} · ${status.dividend_screen.rows} 只盈利且有已实施分红的主板股票` : '请先同步利润表，再采集分红筛选快照'}。当前修订版，不支持历史回测。</div></div>
+          <button className="rounded-btn border border-border px-3 py-2 disabled:opacity-50" disabled={syncing} onClick={() => handleSync('dividend_screen')}>{syncing ? '同步中…' : '同步分红筛选快照'}</button>
+        </div>}
+
         {syncing && (
           <div className="flex items-center gap-2 rounded-card border border-accent/30 bg-accent/[0.06] px-3 py-2 text-xs text-accent">
             <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-            正在从 TickFlow 拉取财务数据，请稍候…
+            正在从{status?.provider === 'eastmoney' ? '公开财务源' : 'TickFlow'}拉取数据，请稍候…
           </div>
         )}
 

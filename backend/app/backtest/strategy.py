@@ -99,6 +99,9 @@ class StrategyBacktestService:
         except ValueError as e:
             return _err(str(e))
 
+        if s.meta.get("current_snapshot_only"):
+            return _err("该策略使用当前公开财报/分红/证券名单快照，不支持历史回测；需历史PIT数据及月度组合撮合后才能回测")
+
         overrides = config.overrides or {}
         params = self._normalize_params({**(overrides.get('params') or {}), **(config.params or {})}, s)
         try:

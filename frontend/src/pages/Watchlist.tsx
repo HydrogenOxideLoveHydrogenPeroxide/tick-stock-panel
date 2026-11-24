@@ -5,6 +5,7 @@ import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, 
 import { api, type KlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
+import { WATCHLIST_BOARDS as BOARDS, getWatchlistBoard as getBoardType, normalizeWatchlistBoards } from '@/lib/watchlist-filters'
 import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, instrumentPriceDigits } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
@@ -28,18 +29,6 @@ import {
 
 // ===== 板块标识（筛选/卡片用） =====
 // 注: boardTag（创/科/北 标签）已移至共享 @/components/stock-table/primitives
-
-const BOARDS = ['沪主板', '深主板', '创业板', '科创板', '北交所'] as const
-type BoardType = typeof BOARDS[number]
-
-function getBoardType(symbol: string): BoardType | null {
-  if (/^(300|301)/.test(symbol)) return '创业板'
-  if (/^688/.test(symbol))       return '科创板'
-  if (/\.BJ$/.test(symbol))      return '北交所'
-  if (/^60[0135]/.test(symbol))  return '沪主板'
-  if (/^00[012]/.test(symbol))   return '深主板'
-  return null
-}
 
 // ===== 换手率分档色（卡片/表格用） =====
 
@@ -667,8 +656,7 @@ export function Watchlist() {
 
   // 板块筛选（持久化）
   const [boardFilter, setBoardFilter] = useState<Set<string>>(() => {
-    const saved = storage.watchlistBoardFilter.get([])
-    return saved.length > 0 ? new Set(saved) : new Set(BOARDS) // 默认全选
+    return normalizeWatchlistBoards(storage.watchlistBoardFilter.get([...BOARDS]))
   })
   const persistBoardFilter = useCallback((next: Set<string>) => {
     setBoardFilter(next)
@@ -676,14 +664,11 @@ export function Watchlist() {
   }, [])
 
   const toggleBoard = useCallback((board: string) => {
-    setBoardFilter(prev => {
-      const next = new Set(prev)
-      if (next.has(board)) next.delete(board)
-      else next.add(board)
-      persistBoardFilter(next)
-      return next
-    })
-  }, [persistBoardFilter])
+    const next = new Set(boardFilter)
+    if (next.has(board)) next.delete(board)
+    else next.add(board)
+    persistBoardFilter(next)
+  }, [boardFilter, persistBoardFilter])
 
   const updateFilter = useCallback((colId: string, patch: { min?: string; max?: string; text?: string }) => {
     setFilters(prev => {
@@ -699,7 +684,10 @@ export function Watchlist() {
     })
   }, [])
 
-  const clearFilters = useCallback(() => setFilters({}), [])
+  const clearFilters = useCallback(() => {
+    setFilters({})
+    persistBoardFilter(new Set(BOARDS))
+  }, [persistBoardFilter])
 
   // 可筛选的内置列
   const filterableBuiltinCols = useMemo(
@@ -724,7 +712,7 @@ export function Watchlist() {
   const filteredRows = useMemo(() => {
     // 板块筛选（全选时跳过）
     let result = rows
-    if (boardFilter.size > 0 && boardFilter.size < BOARDS.length) {
+    if (boardFilter.size < BOARDS.length) {
       result = result.filter(r => {
         const board = getBoardType(r.symbol)
         return board != null && boardFilter.has(board)
@@ -753,6 +741,7 @@ export function Watchlist() {
   }, [rows, filters, columns, boardFilter])
 
   const activeFilterCount = Object.values(filters).filter(v => v.min || v.max || v.text).length
+  const hasActiveFilters = activeFilterCount > 0 || boardFilter.size < BOARDS.length
 
   // 排序（复用共享三态排序 hook）
   const { sort, toggle: handleSortToggle, sortRows } = useTableSort()
@@ -769,7 +758,9 @@ export function Watchlist() {
   )
 
   // 被过滤掉的个股数 (筛选/板块过滤导致的隐藏)
-  const hiddenCount = Math.max(0, allSymbols.length - sortedRows.length)
+  const hiddenCount = Math.max(0, rows.length - sortedRows.length)
+  const pendingDataCount = Math.max(0, allSymbols.length - rows.length)
+    + rows.filter((r: any) => r.rt_price == null && r.close == null).length
 
   return (
     <div className="flex flex-col h-full">
@@ -786,23 +777,33 @@ export function Watchlist() {
             </span>
             {/* 过滤提示: 仅在有隐藏时出现, 柔和橙色融入整体 */}
             {hiddenCount > 0 && (
-              <span
+              <button
+                type="button"
+                onClick={() => setFilterOpen(true)}
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-warning/12 text-warning/90 border border-warning/25 whitespace-nowrap"
                 title={`当前有 ${hiddenCount} 只被筛选条件隐藏,清除筛选可查看全部`}
               >
                 <Filter className="h-2.5 w-2.5" />
-                已过滤 {hiddenCount}
-              </span>
+                筛选隐藏 {hiddenCount}
+              </button>
+            )}
+            {pendingDataCount > 0 && (
+              <span className="text-[10px] text-muted" title="这些自选尚缺行情数据，不是被筛选隐藏">行情待补 {pendingDataCount}</span>
             )}
           </span>
         }
         right={
           <div className="flex items-center gap-2">
+            {hasActiveFilters && (
+              <button type="button" onClick={clearFilters} className="shrink-0 text-xs text-accent hover:underline" title="取消所有数值和板块筛选，保留自选列表">
+                显示全部
+              </button>
+            )}
             {/* 筛选 / 搜索 */}
             <button
               onClick={() => setFilterOpen(v => !v)}
               className={`inline-flex items-center justify-center h-8 w-8 rounded-btn transition-colors duration-150 ease-smooth ${
-                filterOpen || activeFilterCount > 0
+                filterOpen || hasActiveFilters
                   ? 'bg-accent/15 text-accent hover:bg-accent/25'
                   : 'bg-elevated text-secondary hover:bg-elevated/80'
               }`}
@@ -921,7 +922,7 @@ export function Watchlist() {
               </div>
             )
           })}
-          {activeFilterCount > 0 && (
+          {hasActiveFilters && (
             <button onClick={clearFilters} className="mt-1 text-[10px] text-danger hover:text-danger/80 transition-colors">
               清除全部筛选
             </button>

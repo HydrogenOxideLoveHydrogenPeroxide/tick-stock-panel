@@ -122,3 +122,10 @@ research/
 # Regenerable local dependency audit outputs
 backend/audit-python-local.json
 frontend/audit-local.json
+
+# Deployment backups and private SSH material
+backups/
+*.pem
+*.key
+id_rsa
+id_ed25519

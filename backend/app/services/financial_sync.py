@@ -15,6 +15,7 @@ from typing import Any
 import polars as pl
 
 from app.tickflow.capabilities import Cap, CapabilitySet
+from app.services import public_financials, dividend_screen
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,8 @@ def _sync_table(
     latest_only: bool = True,
 ) -> int:
     """同步单张财务表。返回写入的行数。"""
+    if public_financials.enabled():
+        return public_financials.sync_table(data_dir, table)
     if not capset.has(Cap.FINANCIAL):
         logger.info("sync_%s skipped: no FINANCIAL capability", table)
         return 0
@@ -135,7 +138,7 @@ def sync_cash_flow(data_dir: Path, capset: CapabilitySet) -> int:
 
 def sync_all(data_dir: Path, capset: CapabilitySet) -> dict[str, int]:
     """同步所有财务表。返回 {table: rows}。"""
-    if not capset.has(Cap.FINANCIAL):
+    if not public_financials.available(capset):
         logger.info("sync_all financials skipped: no FINANCIAL capability")
         return {}
 
@@ -199,6 +202,7 @@ class FinancialScheduler:
         self._last_sync: dict[str, str] = {}  # {table: iso_timestamp}
         # 手动同步(run_now)是否正在进行。前端据此显示"同步中"并防重复点击。
         self._is_syncing = False
+        self.last_error: str | None = None
 
     def start(self, data_dir: Path, capset: CapabilitySet, *, auto_schedule: bool = False) -> None:
         """初始化调度器，并按需启动周期同步后台任务。
@@ -213,7 +217,7 @@ class FinancialScheduler:
         # 即便 app.state.capabilities 已更新, 调度器仍报 "no FINANCIAL capability"。
         self._data_dir = data_dir
         self._capset = capset
-        if not capset.has(Cap.FINANCIAL):
+        if not public_financials.available(capset):
             logger.info("FinancialScheduler skipped: no FINANCIAL capability")
             return
         # 从持久化恢复上次同步时间: 重启后前端仍能显示真实最后同步时间,而非"尚未同步"
@@ -322,6 +326,7 @@ class FinancialScheduler:
                 "income": sync_income,
                 "balance_sheet": sync_balance_sheet,
                 "cash_flow": sync_cash_flow,
+                "dividend_screen": lambda data_dir, capset: dividend_screen.sync_snapshot(data_dir)["rows"],
             }.get(table)
             if not fn:
                 return {}
@@ -335,6 +340,10 @@ class FinancialScheduler:
             result[t] = _sync_table(t, symbols, self._data_dir, self._capset, latest_only=True)
             self._record_sync(t)
         _refresh_financials_views(self._data_dir)
+        if public_financials.enabled():
+            from app.services.dividend_screen import sync_snapshot
+            result["dividend_screen"] = sync_snapshot(self._data_dir)["rows"]
+            self._record_sync("dividend_screen")
         return result
 
     def run_now(self, table: str | None = None) -> dict[str, int]:
@@ -347,13 +356,14 @@ class FinancialScheduler:
         用 _is_syncing 标志防并发:若已有同步在进行,本次直接跳过,
         避免重复请求拖慢服务端 / 触发上游限流。
         """
-        if not self._capset or not self._capset.has(Cap.FINANCIAL):
+        if not public_financials.available(self._capset):
             return {}
         with self._lock:
             if self._is_syncing:
                 logger.info("financial sync skipped: already running")
                 return {"_skipped": 1}
             self._is_syncing = True
+            self.last_error = None
         try:
             return self._run_body(table)
         finally:
@@ -372,7 +382,7 @@ class FinancialScheduler:
         /status 已能看到 syncing=True,无竞态窗口;同时防止快速重复点击
         启动多个后台线程。后台线程复用 _run_body 执行真正的同步逻辑。
         """
-        if not self._capset or not self._capset.has(Cap.FINANCIAL):
+        if not public_financials.available(self._capset):
             return {"started": False, "reason": "no FINANCIAL capability"}
         with self._lock:
             if self._is_syncing:
@@ -380,11 +390,13 @@ class FinancialScheduler:
                 return {"started": False, "reason": "already running"}
             # 持锁置位:保证 trigger 返回前 syncing 已为 True
             self._is_syncing = True
+            self.last_error = None
 
         def _bg() -> None:
             try:
                 self._run_body(table)
             except Exception as e:  # noqa: BLE001
+                self.last_error = f"{type(e).__name__}: {e}"
                 logger.exception("background financial sync failed: %s", e)
             finally:
                 with self._lock:

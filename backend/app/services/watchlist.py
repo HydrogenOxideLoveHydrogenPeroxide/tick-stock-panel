@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -15,6 +15,51 @@ from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.client import get_client
 
 logger = logging.getLogger(__name__)
+
+
+def latest_local_stock_rows(repo, symbols: list[str], cache_date: date | None) -> pl.DataFrame:
+    """补齐自选的本地日线指标，不联网、不把旧交易日当作最新日。"""
+    if not symbols:
+        return pl.DataFrame()
+    try:
+        base = Path(repo.store.data_dir)
+        if not any((base / 'kline_daily').glob('date=*/part.parquet')):
+            return pl.DataFrame()
+        end = date.today()
+        start = end - timedelta(days=550)
+        raw = repo.get_raw_daily_range(start, end, symbols)
+        if raw.is_empty():
+            return pl.DataFrame()
+        from app.indicators.pipeline import compute_enriched
+        factors = pl.DataFrame()
+        if any((base / 'adj_factor').rglob('*.parquet')):
+            factors = pl.scan_parquet(str(base / 'adj_factor' / '**' / '*.parquet')).filter(
+                pl.col('symbol').is_in(symbols)).collect()
+        enriched = compute_enriched(raw, factors=factors, instruments=repo.get_instruments())
+        if enriched.is_empty():
+            return pl.DataFrame()
+        existing = repo.get_daily_batch(symbols, start, end, columns=['symbol', 'date'])
+        if existing.is_empty():
+            new_rows = enriched
+        else:
+            known = existing.group_by('symbol').agg(pl.col('date').max().alias('_known_until'))
+            new_rows = enriched.join(known, on='symbol', how='left').filter(
+                pl.col('_known_until').is_null() | (pl.col('date') > pl.col('_known_until'))
+            ).drop('_known_until')
+        if not new_rows.is_empty():
+            repo.append_enriched(new_rows)
+        latest = enriched.sort(['symbol', 'date']).group_by('symbol', maintain_order=True).tail(1)
+        # 仅合并同一交易日，避免把全局缓存日期倒退或用旧数据替换新行情。
+        current = latest.filter(pl.col('date') == cache_date) if cache_date else pl.DataFrame()
+        if not current.is_empty():
+            repo.merge_live_enriched_asset('stock', current)
+        return latest.with_columns(
+            pl.lit('local_daily').alias('quote_source'),
+            pl.lit('qfq' if not factors.is_empty() else 'none').alias('adjustment'),
+        )
+    except Exception as exc:  # 单只/单源失败不影响其他已有自选行情。
+        logger.warning('watchlist local daily recovery failed: %s', type(exc).__name__)
+        return pl.DataFrame()
 
 
 def _path() -> Path:

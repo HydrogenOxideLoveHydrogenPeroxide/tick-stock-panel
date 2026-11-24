@@ -251,6 +251,43 @@ _KLINE_KEEP_COLS = [
 # 流式分析入口
 # ================================================================
 
+async def existing_analysis_context(repo, symbol: str, include_news: bool = False, df=None) -> dict:
+    """本地日 K + 可选当前新闻；分别保留行情与新闻时间，不改动数据模式。"""
+    import asyncio
+    from datetime import datetime
+    from app.services.market_news import SHANGHAI, fetch_news_context
+
+    if df is None:
+        df = await asyncio.to_thread(_load_kline, repo, symbol)
+    if df.is_empty():
+        raise ValueError(f'标的 {symbol} 暂无日 K 数据,请先同步')
+    rows = _clean_rows(df.sort('date'), _KLINE_KEEP_COLS)
+    now = datetime.now(SHANGHAI)
+    context = dict(mode='existing', symbol=symbol, period='day',
+                   as_of=rows[-1]['date'], fetched_at=now.isoformat(),
+                   source='本地日K缓存', adjust='沿用本地缓存（复权口径未重新核验）',
+                   rows=rows, news=[], news_enabled=include_news, warnings=[])
+    if include_news:
+        name = ''
+        try:
+            instruments = repo.get_etf_instruments() if _is_etf(repo, symbol) else repo.get_instruments()
+            matched = instruments.filter(pl.col('symbol') == symbol)
+            if not matched.is_empty() and 'name' in matched.columns:
+                name = str(matched['name'][0] or '')
+        except Exception:
+            context['warnings'].append('未取得证券简称，新闻仅按证券代码匹配')
+        try:
+            news = await fetch_news_context(symbol, name=name, now=now)
+            context['news'] = news.get('items', [])
+            context['news_source'] = news.get('source', 'none')
+            context['news_fetched_at'] = news.get('fetched_at')
+            context['warnings'].extend(news.get('warnings', []))
+        except Exception as exc:
+            context['warnings'].append(f'新闻获取失败（{type(exc).__name__}），仅使用已有日K分析')
+        context['warnings'].append('新闻截至本次获取时间，可能晚于行情日期；不作为历史时点已知信息')
+    return context
+
+
 async def analyze_stock_stream(
     repo,
     data_dir: Path,
@@ -278,6 +315,8 @@ async def analyze_stock_stream(
             return
     else:
         df = _load_kline(repo, symbol)
+        if include_news and not df.is_empty():
+            context = await existing_analysis_context(repo, symbol, True, df=df)
     if df.is_empty():
         yield json.dumps({
             "type": "error",
@@ -289,7 +328,9 @@ async def analyze_stock_stream(
     # 分钟数据不冒用日线关键价位或日线指标。
     if context is not None and mode == "morning":
         df = df.with_columns(pl.col("date").str.to_date())
-    levels = compute_levels(df) if context is None or mode == "morning" else {}
+    levels = compute_levels(df) if mode in ("existing", "morning") else {}
+    if context is not None and mode == 'existing':
+        context['levels'] = levels
     close = float(df.tail(1)["close"][0]) if "close" in df.columns else None
 
     # 3. 财务(辅助)
@@ -334,8 +375,9 @@ async def analyze_stock_stream(
             yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
 
     except Exception as e:  # noqa: BLE001
-        logger.exception("AI stock analysis failed for %s: %s", symbol, e)
-        yield json.dumps({"type": "error", "message": f"AI 分析失败: {e}"}, ensure_ascii=False)
+        from app.services.ai_errors import ai_error_message
+        logger.warning("AI stock analysis failed for %s: type=%s status=%s", symbol, type(e).__name__, getattr(e, 'status_code', None))
+        yield json.dumps({"type": "error", "message": ai_error_message(e)}, ensure_ascii=False)
         return
 
     yield json.dumps({"type": "done"}, ensure_ascii=False)

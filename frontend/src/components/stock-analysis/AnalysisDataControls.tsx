@@ -18,7 +18,7 @@ export function AnalysisDataControls({ symbol, mode, includeNews, onModeChange, 
         <label className="flex items-center gap-2 text-secondary">
           数据模式
           <select aria-label="分析数据模式" value={mode} disabled={disabled}
-            onChange={e => { const next = e.target.value as StockAnalysisMode; onModeChange(next); if (next === 'existing') onIncludeNewsChange(false) }}
+            onChange={e => onModeChange(e.target.value as StockAnalysisMode)}
             className="h-8 rounded-btn border border-border bg-base px-2 text-foreground disabled:opacity-50">
             <option value="existing">现有日 K（默认）</option>
             <option value="morning">早间 · 最近完整交易日</option>
@@ -27,12 +27,12 @@ export function AnalysisDataControls({ symbol, mode, includeNews, onModeChange, 
           </select>
         </label>
         <label className="flex items-center gap-1.5 text-secondary">
-          <input type="checkbox" checked={includeNews} disabled={disabled || mode === 'existing'}
+          <input type="checkbox" checked={includeNews} disabled={disabled}
             onChange={e => onIncludeNewsChange(e.target.checked)} className="accent-sky-400" />
           新闻辅助（可选，默认关闭）
         </label>
       </div>
-      <p className="text-[10px] text-muted">模式仅影响分析输入；页面图表与关键价位仍为日 K。新闻辅助仅用于早间 / 午间 / 尾盘模式。</p>
+      <p className="text-[10px] text-muted">模式仅影响分析输入；页面图表与关键价位仍为日 K。所有模式均可开启新闻辅助；默认日 K 模式使用本次获取的新闻。</p>
       <ContextPreview key={JSON.stringify([symbol, mode, includeNews])} symbol={symbol} mode={mode} includeNews={includeNews} disabled={disabled} />
     </div>
   )
@@ -46,7 +46,7 @@ function ContextPreview({ symbol, mode, includeNews, disabled }: Pick<Props, 'sy
   useEffect(() => () => { requestRef.current?.abort() }, [])
 
   const check = async () => {
-    if (!symbol || loading || mode === 'existing') return
+    if (!symbol || loading) return
     requestRef.current?.abort()
     const controller = new AbortController()
     requestRef.current = controller
@@ -67,11 +67,11 @@ function ContextPreview({ symbol, mode, includeNews, disabled }: Pick<Props, 'sy
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <button type="button" onClick={check} disabled={disabled || !symbol || loading || mode === 'existing'}
+        <button type="button" onClick={check} disabled={disabled || !symbol || loading}
           className="inline-flex items-center gap-1.5 rounded-btn border border-border px-3 py-1.5 text-secondary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40">
           {loading && <Loader2 className="h-3 w-3 animate-spin" />}检查数据
         </button>
-        <span className="text-[10px] text-muted">{mode === 'existing' ? '现有模式沿用本地日 K，不请求免费行情预览。' : '仅获取数据预览，不调用 AI。'}</span>
+        <span className="text-[10px] text-muted">仅检查数据，不调用 AI；新闻按上方开关获取。</span>
       </div>
       {context && (
         <div className="rounded-lg border border-border/50 bg-base/40 p-3">

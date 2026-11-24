@@ -10,7 +10,7 @@ import importlib.util
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -54,6 +54,7 @@ class StrategyDef:
     source: str  # "builtin" | "custom" | "ai"
     file_path: Path | None = None
     prepare_history_fn: Callable[[pl.DataFrame, dict], pl.DataFrame] | None = None
+    load_history_fn: Callable | None = None
 
 
 @dataclass
@@ -182,6 +183,7 @@ class StrategyEngine:
             source=source,
             file_path=path,
             prepare_history_fn=getattr(mod, "prepare_history", None),
+            load_history_fn=getattr(mod, "load_history", None),
         )
 
     def reload(self) -> None:
@@ -265,7 +267,9 @@ class StrategyEngine:
 
         # 加载数据。普通策略只读目标日期；声明 filter_history 的策略读取历史窗口。
         if s.filter_history_fn:
-            if s.meta.get("price_basis") == "raw" and self._raw_history_loader:
+            if s.load_history_fn:
+                df=s.load_history_fn(as_of-timedelta(days=max(120,s.lookback_days*2)),as_of,None)
+            elif s.meta.get("price_basis") == "raw" and self._raw_history_loader:
                 df = self._raw_history_loader(as_of, max(1, s.lookback_days))
             elif precomputed_history is not None and not precomputed_history.is_empty():
                 df = precomputed_history

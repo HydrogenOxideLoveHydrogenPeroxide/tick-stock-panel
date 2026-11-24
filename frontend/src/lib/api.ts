@@ -39,6 +39,10 @@ export interface CapabilitiesResponse {
 
 // ===== Financials =====
 export interface FinancialStatus {
+  provider?: string
+  dividend_screen?: { as_of: string; rows: number; observed_at: string; limitations: string[] } | null
+  limitations?: string[]
+  last_error?: string | null
   available: boolean
   tables: Record<string, { rows: number; symbols: number }>
   last_sync: Record<string, string>

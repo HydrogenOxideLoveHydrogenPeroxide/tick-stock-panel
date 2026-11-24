@@ -176,8 +176,18 @@ def run_strategy(req: RunRequest, request: Request):
         merged.update(params)  # 请求里的优先
         params = merged
 
-    # 确定日期
+    # A current public snapshot must not silently inherit an older K-line date.
     as_of = req.as_of
+    try:
+        strategy = engine.get(req.strategy_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if strategy.meta.get("current_snapshot_only") and not as_of:
+        from app.services.dividend_screen import status as snapshot_status
+        snapshot = snapshot_status(data_dir)
+        if not snapshot:
+            raise HTTPException(422, "请先在财务分析页同步公开财报和分红筛选快照")
+        as_of = date.fromisoformat(snapshot["as_of"])
     if not as_of:
         from app.services.screener import ScreenerService
         svc = ScreenerService(request.app.state.repo)
@@ -325,17 +335,20 @@ def get_strategy_source(strategy_id: str, request: Request):
 async def ai_test(request: Request):
     """Send a small prompt through the selected AI provider."""
     from app.services.ai_provider import current_ai_model, current_ai_provider, generate_ai_text
+    from app.services.ai_errors import ai_error_message
 
     try:
         text = await generate_ai_text(
-            [{"role": "user", "content": "您好"}],
+            [{"role": "user", "content": "请只回复：连接正常"}],
             temperature=0,
-            max_tokens=8,
-            timeout=15,
+            max_tokens=128,
+            timeout=90,
         )
+        if not text.strip():
+            return {"ok": False, "error": "AI接口已返回，但没有生成正文，请重试或检查模型响应设置。"}
         return {"ok": True, "model": current_ai_model() or current_ai_provider(), "response": text[:80]}
     except Exception as e:
-        return {"ok": False, "error": "AI连接失败：请检查白名单地址、模型ID、密钥及供应商状态（错误详情不回显）"}
+        return {"ok": False, "error": ai_error_message(e)}
 
 
 @router.post("/build")

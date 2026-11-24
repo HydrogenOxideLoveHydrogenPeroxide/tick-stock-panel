@@ -133,6 +133,7 @@ async def lifespan(app: FastAPI):
         enriched_history_loader=_screener_svc._load_enriched_history,
         strategy_dirs=strategy_dirs,
         strategy_files=[
+            Path(__file__).resolve().parent / "strategy" / "reviewed" / "ai_mwum51zl.py",
             Path(__file__).resolve().parents[3] / "quant-rsi" / "quant" / "index" / "panel.py",
             Path(__file__).resolve().parents[3] / "quant-rsi" / "quant" / "index" / "context_core_panel.py",
         ],

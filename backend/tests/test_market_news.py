@@ -177,6 +177,8 @@ class FetchTests(unittest.IsolatedAsyncioTestCase):
     async def test_transport_limits_redirects_compression_and_identity(self):
         def good(request):
             self.assertEqual(request.headers["accept-encoding"], "identity")
+            self.assertEqual(request.headers["user-agent"], "Mozilla/5.0")
+            self.assertEqual(request.headers["referer"], "https://so.eastmoney.com/")
             return httpx.Response(200, content=b"ok")
         self.assertEqual(await self.request_with(good), "ok")
         handlers = [lambda r: httpx.Response(302, headers={"location": "https://127.0.0.1"}),
@@ -190,6 +192,11 @@ class FetchTests(unittest.IsolatedAsyncioTestCase):
                     await self.request_with(handler)
         with self.assertRaises(httpx.HTTPStatusError):
             await self.request_with(lambda r: httpx.Response(503))
+
+    async def test_empty_success_response_is_not_reported_as_jsonp_change(self):
+        for body in (b"", b" \n\t", b"\xef\xbb\xbf"):
+            with self.subTest(body=body), self.assertRaisesRegex(ValueError, "新闻源返回空内容"):
+                await self.request_with(lambda r: httpx.Response(200, content=body))
 
     async def test_dns_thread_and_total_deadline(self):
         def slow_dns(url):

@@ -155,11 +155,14 @@ class AnalyzeRequest(BaseModel):
 
 @router.get("/context")
 async def preview_context(request: Request, symbol: str,
-                          mode: Literal["morning", "noon", "tail"] = "morning",
+                          mode: Literal["existing", "morning", "noon", "tail"] = "morning",
                           include_news: bool = False):
     """免费行情预览，不调用AI、不写日K或报告。"""
     from app.services.market_sources import fetch_market_context
     try:
+        if mode == 'existing':
+            from app.services.stock_analyzer import existing_analysis_context
+            return await existing_analysis_context(request.app.state.repo, symbol, include_news)
         return await fetch_market_context(request.app.state.repo, symbol, mode, include_news)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

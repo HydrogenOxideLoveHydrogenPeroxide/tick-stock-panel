@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     # TickFlow
     tickflow_api_key: str = Field(default="", description="留空启用 free 模式")
 
+    # Financial statements are independent of the TickFlow quote subscription.
+    financial_data_provider: str = "eastmoney"  # eastmoney / tickflow
+
     # AI
     ai_provider: str = "openai_compat"
     ai_base_url: str = "https://api.deepseek.com/v1"
