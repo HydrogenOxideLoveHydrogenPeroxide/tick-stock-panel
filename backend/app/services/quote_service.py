@@ -123,6 +123,7 @@ class QuoteService:
         self._fetch_lock = threading.Lock()
         self._running = False
         self._enabled = False      # 全局开关 (持久化到 preferences)
+        self._watchlist_batch_cursor = 0
         self._interval = self.DEFAULT_INTERVAL
         self._thread: threading.Thread | None = None
         self._repo = None          # 延迟注入, 避免循环导入
@@ -533,8 +534,20 @@ class QuoteService:
         # ---- 策略监控 + 告警评估 ----
         self._evaluate_monitors(daily_df, quote_extra)
 
+    def _next_watchlist_batch(self, symbols: list[str]) -> list[str]:
+        """Rotate through every watchlist entry within the provider's 5-symbol request cap.
+
+        Called under _fetch_lock. One batch per poll preserves the Free request cadence.
+        """
+        if not symbols:
+            return []
+        count = (len(symbols) + 4) // 5
+        index = self._watchlist_batch_cursor % count
+        self._watchlist_batch_cursor = (index + 1) % count
+        return symbols[index * 5:(index + 1) * 5]
+
     def _fetch_watchlist_quotes(self) -> None:
-        """Free 档自选股实时: 只拉取最多 5 个 symbols。"""
+        """Free 档自选股实时: 每轮最多5只，轮询覆盖全部自选。"""
         from app.services import preferences
         from app.tickflow.client import get_paid_realtime_client
 
@@ -548,10 +561,11 @@ class QuoteService:
             logger.warning("自选实时拉取失败:未配置付费服务器 API Key")
             return
 
+        batch = self._next_watchlist_batch(symbols)
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
         try:
-            resp = tf.quotes.get(symbols=symbols) or []
+            resp = tf.quotes.get(symbols=batch) or []
         except Exception as e:  # noqa: BLE001
             logger.warning("自选实时拉取失败: %s", e)
             return

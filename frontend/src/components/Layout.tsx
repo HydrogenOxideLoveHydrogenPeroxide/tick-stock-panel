@@ -544,7 +544,7 @@ export function Layout() {
             <div className="mt-1.5 text-[10px] leading-snug space-y-0.5">
               {isWatchlistMode && !dismissFreeHint && (
                 <div className="flex items-start gap-1 text-amber-400/80">
-                  <span className="flex-1">监控自选股前 5 只，全市场监控需 Starter+</span>
+                  <span className="flex-1">监控全部自选股，全市场监控需 Starter+</span>
                   <button
                     onClick={() => setDismissFreeHint(true)}
                     className="text-amber-400/50 hover:text-amber-400 shrink-0 transition-colors"

@@ -509,7 +509,7 @@ class RealtimeWatchlistPrefs(BaseModel):
 
 @router.put("/preferences/realtime-watchlist")
 def update_realtime_watchlist(req: RealtimeWatchlistPrefs) -> dict:
-    """兼容旧入口；Free 实时标的由自选页前 5 个决定。"""
+    """兼容旧入口；Free 实时标的由自选页全部标的决定。"""
     from app.services import preferences
     symbols = preferences.set_realtime_watchlist_symbols(req.symbols)
     return {"realtime_watchlist_symbols": symbols}

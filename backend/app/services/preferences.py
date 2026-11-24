@@ -54,7 +54,7 @@ def get_realtime_quote_interval() -> float:
 
 
 def get_realtime_watchlist_symbols() -> list[str]:
-    """Free 档自选实时监控标的:直接取自选页前 5 个。"""
+    """Free 档自选实时监控标的:直接取自选页全部标的。"""
     try:
         from app.services import watchlist
         rows = watchlist.list_symbols()
@@ -66,13 +66,11 @@ def get_realtime_watchlist_symbols() -> list[str]:
         symbol = str((row or {}).get("symbol") or "").strip().upper()
         if symbol and symbol not in out:
             out.append(symbol)
-        if len(out) >= 5:
-            break
     return out
 
 
 def set_realtime_watchlist_symbols(symbols: list[str]) -> list[str]:  # noqa: ARG001
-    """兼容旧接口: Free 实时标的现在由自选页前 5 个决定。"""
+    """兼容旧接口: Free 实时标的现在由自选页全部标的决定。"""
     return get_realtime_watchlist_symbols()
 
 
