@@ -11,7 +11,8 @@ function load(relative, overrides = {}, globals = {}) {
   const output = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: {
     module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
   }}).outputText
-  const requireMock = name => name in overrides ? overrides[name] : realRequire(name)
+  const requireMock = name => name in overrides ? overrides[name]
+    : name === './httpErrorNotice' ? load('lib/httpErrorNotice.ts') : realRequire(name)
   vm.runInNewContext('(function(require,module,exports){' + output + '\n})', { console, Error, ...globals })(requireMock, module, module.exports)
   return module.exports
 }

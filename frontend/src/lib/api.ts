@@ -4,6 +4,9 @@
 // Prod:同源(FastAPI 托管前端 dist)
 
 import { toast } from '@/components/Toast'
+import { createHttpErrorNotifier } from './httpErrorNotice'
+
+const notifyHttpError = createHttpErrorNotifier(toast)
 
 const BASE = ''
 
@@ -19,7 +22,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
     const msg = detail || `${res.status} ${res.statusText}`
     // 401 (未登录/会话过期) 不弹 toast — 由全局认证拦截器统一跳登录页, 避免刷屏
-    if (res.status !== 401) toast(msg, 'error')
+    notifyHttpError(res.status, msg)
     throw new Error(msg)
   }
   return res.json() as Promise<T>
@@ -1455,7 +1458,7 @@ export const api = {
       let detail = ''
       try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
       const msg = detail || `${res.status} ${res.statusText}`
-      toast(msg, 'error')
+      notifyHttpError(res.status, msg)
       throw new Error(msg)
     }
     if (!res.body) throw new Error('响应无 body')
@@ -1540,7 +1543,7 @@ export const api = {
       let detail = ''
       try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
       const msg = detail || `${res.status} ${res.statusText}`
-      toast(msg, 'error')
+      notifyHttpError(res.status, msg)
       throw new Error(msg)
     }
     if (!res.body) throw new Error('响应无 body')
@@ -1602,7 +1605,7 @@ export const api = {
       let detail = ''
       try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
       const msg = detail || `${res.status} ${res.statusText}`
-      toast(msg, 'error')
+      notifyHttpError(res.status, msg)
       throw new Error(msg)
     }
     if (!res.body) throw new Error('响应无 body')
@@ -1644,7 +1647,7 @@ export const api = {
       let detail = ''
       try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
       const msg = detail || `${res.status} ${res.statusText}`
-      toast(msg, 'error')
+      notifyHttpError(res.status, msg)
       throw new Error(msg)
     }
     if (!res.body) throw new Error('响应无 body')
